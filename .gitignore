@@ -1,0 +1,21 @@
+node_modules/
+.next/
+out/
+.env
+.env.*
+!.env.example
+*.log
+coverage/
+*.tsbuildinfo
+.android-build/
+/.env.local
+
+# Android/Capacitor generated files and machine-local SDK paths.
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/app/src/main/assets/
+android/app/capacitor.build.gradle
+android/capacitor.settings.gradle
+android/local.properties
