@@ -5,10 +5,12 @@
 
 ## 当前验收结论
 
-- 结论：未验收
+- 结论：原型 Gate 部分通过；GitHub public 源码与 APK 发布子项已通过
 - 验收范围：`0.2.0-prototype` 对话优先首页、紧凑待办/日程、单字段随手记、晚报统一提问、21:30 晚间回顾偏好、受管 LLM 接入、微信公众号文本回调、AI Agent 学习路线、理解测验评分、运动/生活/休息行动、可选番茄钟、Capacitor Android debug APK、独立移动壳 v3、公开 GitHub 发布和 APK AI 调试工具
 - 最后检查：2026-08-11（类型、Lint、脚本 doctor/smoke/logs、公开仓库 staged 清单与 APK 大小/哈希；上一轮已完成生产构建、Agent/测验 HTTP 旅程、浏览器与 Android Gradle debug 回归）
 - 遗留问题：当前记录、测验态、wellbeing 分类统计、回顾偏好和番茄钟使用本机 localStorage/客户端状态而非真实数据库；21:30 尚未接后台定时任务/微信通知；路线进度、题目难度与评分一致性评测、真实微信账号、公网 HTTPS、加密模式、多用户隔离、浮层完整无障碍、Android 正式签名/真机联调、用户试验和生产隐私 Gate 尚未完成
+
+- E-024 发布复核（2026-08-11）：`gh repo view redmaplewww/growth-loop-agent` 确认 `isPrivate=false`、默认分支为 `main`；GitHub Contents API 与 raw 下载均确认 `artifacts/android/growth-loop-debug.apk` 存在，远程大小 4,117,426 bytes，SHA-256 `F69502AFA1F227F68DF64A97D111C4161A9CEEA67A9D7338D56823B96C96987C` 与本地一致。`agent/public-apk-debug-tooling` 与 `main` 均已推送。
 
 ## 验收标准
 

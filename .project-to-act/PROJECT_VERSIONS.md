@@ -5,11 +5,13 @@
 ## 当前版本
 
 - 版本号：`0.2.0-prototype`
-- 发布状态：未发布
+- 发布状态：GitHub public 已发布（产品仍为 `0.2.0-prototype`，非生产 release）
 - 兼容性说明：Next.js 16.3.0 + React 19.2.8；当前为本地原型，数据来自确定性 seed，单字段记录以浏览器 localStorage 回读，白天不自动出题，晚报通过受管 OpenAI-compatible profile 统一提问；微信公众号接口支持明文签名校验与 XML 文本回调；Android 通过 Capacitor 8.5.0 壳复用服务端，移动端使用独立 v3 视觉与交互，默认模拟器地址为 `10.0.2.2:3000`，正式上线前仍需公网 HTTPS、数据库、正式签名和官方账号审核
-- 最后更新：2026-08-10
+- 最后更新：2026-08-11
 
 ## 下一版本计划
+
+- `0.2.0-prototype`｜2026-08-11｜公开 GitHub 与 APK 调试交付｜创建 public 仓库 `redmaplewww/growth-loop-agent`，推送源码、Android 工程、4.1 MB debug APK、PowerShell doctor/build/install/run/smoke/logs 脚本和 AI 调试说明；远程 APK 哈希与本地一致｜回应用户要求将 APK 与可复现调试入口一并公开｜正式 HTTPS、release keystore、AAB/真机和生产微信仍待后续｜E-024｜公开发布子项通过，整体原型 Gate 仍部分通过。
 
 - 目标版本：`0.3.0-mvp`
 - 计划内容：持久化任务/记录/账本、其余工作台页面、微信登录与订阅适配、Agent 评测集

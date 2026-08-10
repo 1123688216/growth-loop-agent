@@ -4,6 +4,8 @@
 
 ## 当前任务
 
+> GitHub 发布状态（2026-08-11）：`https://github.com/redmaplewww/growth-loop-agent` 已创建为 public，`main` 已推送源码与 `artifacts/android/growth-loop-debug.apk`；远程 APK 为 4,117,426 bytes，SHA-256 已与本地文件核对一致。后续可直接 clone 后按 `docs/ANDROID_APK_DEBUG_AI.md` 调试。
+
 | 任务 | 状态 | 负责人 | 完成条件 | 证据 ID | 最后更新 |
 |---|---|---|---|---|---|
 | 评审完整产品设计 v0.1 | 已完成（进入实现） | 用户 / Codex | 用户确认按当前方案开始代码实现 | E-001～E-003、E-005 | 2026-08-09 |
