@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -22,10 +22,8 @@ import {
   Send,
   Sparkles,
   Target,
-  Timer,
   Trophy,
   X,
-  Zap,
 } from "lucide-react";
 import { demoSeed, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
 
@@ -57,13 +55,9 @@ type MobileAppShellProps = {
   onSplitGoal: (goal: Goal) => void;
   assistantReply: string;
   isAgentBusy: boolean;
-  onGenerateQuiz: (log: MobileLiveLog) => void;
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
-  pomodoroVisible: boolean;
-  onTogglePomodoro: () => void;
-  pomodoro: ReactNode;
   isFocusRunning: boolean;
   onToggleFocus: () => void;
   toast: string;
@@ -93,9 +87,6 @@ export default function MobileAppShell({
   reviewEnabled,
   onToggleReview,
   onStartReview,
-  pomodoroVisible,
-  onTogglePomodoro,
-  pomodoro,
   isFocusRunning,
   onToggleFocus,
   toast,
@@ -114,10 +105,7 @@ export default function MobileAppShell({
     setComposerOpen(false);
   }
 
-  function quickPrompt(prompt: string) {
-    setInput(prompt);
-    setComposerOpen(true);
-  }
+  const isHome = activeTab === "今日";
 
   return (
     <main className="app-mobile-v3">
@@ -133,27 +121,22 @@ export default function MobileAppShell({
         </div>
       </header>
 
-      <div className="app-mobile-v3-scroll">
+      <div className={`app-mobile-v3-scroll ${isHome ? "is-home" : ""}`}>
         {activeTab === "今日" && (
-          <MobileTodayV3
+          <MobileTodayV4
             tasks={tasks}
             doneCount={doneCount}
             input={input}
             setInput={setInput}
             onSubmit={onSubmit}
-            onToggleTask={onToggleTask}
             onNavigate={onNavigate}
             assistantReply={assistantReply}
             isAgentBusy={isAgentBusy}
             reviewEnabled={reviewEnabled}
             onToggleReview={onToggleReview}
             onStartReview={onStartReview}
-            pomodoroVisible={pomodoroVisible}
-            onTogglePomodoro={onTogglePomodoro}
-            pomodoro={pomodoro}
             isFocusRunning={isFocusRunning}
             onToggleFocus={onToggleFocus}
-            onQuickPrompt={quickPrompt}
           />
         )}
         {activeTab === "计划" && (
@@ -170,10 +153,10 @@ export default function MobileAppShell({
         {activeTab === "成长" && <MobileGrowthV3 earnedCoins={earnedCoins} />}
       </div>
 
-      <button className="app-mobile-v3-fab" onClick={() => openComposer()} aria-label="打开随手记录">
+      {!isHome && <button className="app-mobile-v3-fab" onClick={() => openComposer()} aria-label="打开随手记录">
         <Plus size={20} strokeWidth={2.8} />
         <span>记录</span>
-      </button>
+      </button>}
 
       <nav className="app-mobile-v3-tabbar" aria-label="移动端主导航">
         {mobileTabs.map(({ label, icon: Icon, short }) => (
@@ -199,113 +182,67 @@ export default function MobileAppShell({
   );
 }
 
-function MobileTodayV3({
+function MobileTodayV4({
   tasks,
   doneCount,
   input,
   setInput,
   onSubmit,
-  onToggleTask,
   onNavigate,
   assistantReply,
   isAgentBusy,
   reviewEnabled,
   onToggleReview,
   onStartReview,
-  pomodoroVisible,
-  onTogglePomodoro,
-  pomodoro,
   isFocusRunning,
   onToggleFocus,
-  onQuickPrompt,
 }: {
   tasks: Task[];
   doneCount: number;
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
   onSubmit: () => void;
-  onToggleTask: (id: string) => void;
   onNavigate: (tab: MobileTab) => void;
   assistantReply: string;
   isAgentBusy: boolean;
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
-  pomodoroVisible: boolean;
-  onTogglePomodoro: () => void;
-  pomodoro: ReactNode;
   isFocusRunning: boolean;
   onToggleFocus: () => void;
-  onQuickPrompt: (prompt: string) => void;
 }) {
   const primaryTask = tasks.find((task) => task.status === "current") || tasks.find((task) => task.status !== "done") || tasks[0];
-  const visibleTasks = tasks.slice(0, 3);
-  const progress = Math.round((doneCount / Math.max(tasks.length, 1)) * 100);
 
   return (
-    <div className="app-mobile-v3-page app-mobile-v3-home">
-      <section className="app-mobile-v3-welcome">
-        <div>
-          <span className="app-mobile-v3-label">{demoSeed.user.weekdayLabel} · {demoSeed.user.dateLabel}</span>
-          <h1>今天，做一件<br />对明天有用的事。</h1>
+    <div className="app-mobile-v4-home" data-mobile-home="v4">
+      <section className="app-mobile-v4-meta" aria-label="今日状态">
+        <div className="app-mobile-v4-date"><span className="app-mobile-v4-mini-mark"><Sparkles size={12} /></span><strong>今天</strong><span>{demoSeed.user.weekdayLabel} · {demoSeed.user.dateLabel}</span></div>
+        <span className="app-mobile-v4-streak"><Flame size={13} /> 连续 {demoSeed.user.streak} 天</span>
+      </section>
+
+      <section className="app-mobile-v4-stage" aria-label="AI 今日对话">
+        <div className="app-mobile-v4-presence">
+          <div className={`app-mobile-v4-orb ${isAgentBusy ? "is-busy" : ""}`}><Sparkles size={21} /></div>
+          <div><span>AI 今日搭档</span><strong>{isAgentBusy ? "我正在整理这件事" : "我在听，随时告诉我"}</strong></div>
+          <i className="app-mobile-v4-online-dot" aria-label="在线" />
         </div>
-        <div className="app-mobile-v3-day-ring" style={{ "--day-progress": `${progress * 3.6}deg` } as React.CSSProperties}>
-          <strong>{progress}<small>%</small></strong>
-          <span>今日</span>
+        <p className="app-mobile-v4-reply">{assistantReply}</p>
+        <div className="app-mobile-v4-next">
+          <div className="app-mobile-v4-next-label"><span>下一步</span><em>{primaryTask?.duration || "15 min"}</em></div>
+          <div className="app-mobile-v4-next-main"><strong>{primaryTask?.title || "写下今天的第一件事"}</strong><button onClick={onToggleFocus}>{isFocusRunning ? <><i />专注中</> : <>开始 <ArrowRight size={14} /></>}</button></div>
+          <p>{primaryTask?.subtitle || "AI 会替你把目标拆成现在能完成的一小步。"}</p>
         </div>
       </section>
 
-      <section className="app-mobile-v3-next-card">
-        <div className="app-mobile-v3-next-card-glow" />
-        <div className="app-mobile-v3-card-label"><span><Zap size={13} /> NEXT MOVE</span><em>{primaryTask?.duration || "15 min"}</em></div>
-        <h2>{primaryTask?.title || "写下今天的第一步"}</h2>
-        <p>{primaryTask?.subtitle || "把想法变成一个现在就能开始的动作。"}</p>
-        <div className="app-mobile-v3-next-foot">
-          <span className={`app-mobile-v3-kind kind-${primaryTask?.kind || "focus"}`}>{taskKindLabel(primaryTask?.kind || "focus")}</span>
-          <button onClick={onToggleFocus}>{isFocusRunning ? <><i className="app-mobile-v3-pulse-dot" />专注中</> : <>开始这一小步 <ArrowRight size={15} /></>}</button>
-        </div>
+      <section className="app-mobile-v4-composer" aria-label="写给 AI">
+        <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="今天发生了什么？直接说给我。" rows={4} aria-label="今天发生了什么" />
+        <div className="app-mobile-v4-composer-foot"><span>{input.length}/480</span><button onClick={onSubmit} disabled={!input.trim() || isAgentBusy}>{isAgentBusy ? <><span className="app-mobile-v4-spinner" />整理中</> : <>发给 AI <Send size={15} /></>}</button></div>
       </section>
 
-      <section className="app-mobile-v3-ai-dock">
-        <div className="app-mobile-v3-ai-heading">
-          <div className="app-mobile-v3-ai-orb"><Sparkles size={16} /></div>
-          <div><strong>说给 AI</strong><span>随手记，晚报再整理</span></div>
-          <span className="app-mobile-v3-online"><i /> 在线</span>
-        </div>
-        <p className="app-mobile-v3-ai-reply">{assistantReply}</p>
-        <div className="app-mobile-v3-inline-composer">
-          <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="今天发生了什么？" rows={2} aria-label="今天发生了什么" />
-          <button onClick={onSubmit} disabled={!input.trim() || isAgentBusy} aria-label="保存记录">
-            {isAgentBusy ? <span className="app-mobile-v3-spinner" /> : <Send size={17} />}
-          </button>
-        </div>
-        <div className="app-mobile-v3-compose-meta"><span>{input.length}/480</span><span>晚上 21:30 统一回顾</span></div>
-        <div className="app-mobile-v3-suggestion-row">
-          <button onClick={() => onQuickPrompt("今天学了什么：")}>学习</button>
-          <button onClick={() => onQuickPrompt("今天完成了一次运动：")}>运动</button>
-          <button onClick={() => onQuickPrompt("今天生活里值得记下的一件事：")}>生活</button>
-        </div>
+      <section className="app-mobile-v4-links" aria-label="AI 自动安排">
+        <button className="app-mobile-v4-review-link" onClick={onStartReview}><Moon size={14} /><span>{reviewEnabled ? "今晚 21:30，AI 会来做晚报" : "晚报未开启，点这里交给 AI"}</span><ArrowRight size={13} /></button>
+        <div className="app-mobile-v4-progress-link"><button onClick={() => onNavigate("计划")}><span>{doneCount}/{tasks.length} 个下一步完成</span><ChevronRight size={14} /></button><button className={`app-mobile-v4-review-toggle ${reviewEnabled ? "is-on" : ""}`} onClick={onToggleReview} aria-pressed={reviewEnabled}><i />{reviewEnabled ? "已安排" : "安排"}</button></div>
       </section>
-
-      <section className="app-mobile-v3-night-strip">
-        <div className="app-mobile-v3-moon"><Moon size={16} /></div>
-        <div><span>今晚 21:30 · 晚报</span><strong>白天先活，晚上再收束</strong></div>
-        <button className={`app-mobile-v3-toggle ${reviewEnabled ? "is-on" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><i /></button>
-        <button className="app-mobile-v3-night-cta" onClick={onStartReview} aria-label="现在开始晚报回顾"><ArrowRight size={16} /></button>
-      </section>
-
-      <section className="app-mobile-v3-today-block">
-        <div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">TODAY</span><h2>接下来</h2></div><button onClick={() => onNavigate("计划")}>查看路线 <ChevronRight size={15} /></button></div>
-        <div className="app-mobile-v3-task-list">{visibleTasks.map((task) => <MobileTaskV3 key={task.id} task={task} onToggle={onToggleTask} />)}</div>
-        <div className="app-mobile-v3-task-progress"><span>{doneCount}/{tasks.length} 已完成</span><i><b style={{ width: `${progress}%` }} /></i></div>
-      </section>
-
-      <button className="app-mobile-v3-tool-row" onClick={onTogglePomodoro}>
-        <span className="app-mobile-v3-tool-icon"><Timer size={17} /></span>
-        <span><strong>{pomodoroVisible ? "专注节奏已打开" : "需要一点节奏？"}</strong><small>{pomodoroVisible ? "25 分钟专注 · 5 分钟恢复" : "番茄钟是可选的，不替你安排生活"}</small></span>
-        <ChevronRight size={17} />
-      </button>
-      {pomodoroVisible && <div className="app-mobile-v3-pomodoro">{pomodoro}</div>}
     </div>
   );
 }
@@ -385,10 +322,6 @@ function MobileComposerV3({ input, setInput, isBusy, onClose, onSubmit }: { inpu
       </section>
     </div>
   );
-}
-
-function taskKindLabel(kind: TaskKind) {
-  return ({ focus: "专注", learn: "学习", exercise: "运动", life: "生活", rest: "休息" })[kind];
 }
 
 function renderTaskKindIcon(kind: TaskKind, size: number) {

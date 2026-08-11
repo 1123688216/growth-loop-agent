@@ -1,5 +1,13 @@
 # 项目验收
 
+## v4 验收补充（2026-08-11）
+
+| ID | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| A-027 | Android 首页应尽量占满 412×867 屏幕，默认不产生上下滑动，用户主要与 AI 互动 | 通过（原型） | `.app-mobile-v4-home` 使用固定视口网格；CDP `homeScrollFits=true`、`hasHomeV4=true`、`hasAiComposer=true`、`hasNextMove=true`、`hasNightReport=true`；底部导航可进入路线/收集/节奏；截图完成视觉复核 | E-025 |
+
+| E-025 | 2026-08-11 | `npm.cmd run typecheck`; `npm.cmd run lint`; `npm.cmd run build`; `npm.cmd run android:debug`; `scripts/debug-apk.ps1 -Action doctor/smoke/logs`; Android WebView CDP 与截图 | 全部通过；smoke `ok=true`，视口 412×867，body/document 宽度 412，首页无纵向溢出；doctor HTTP 200/模拟器在线；logs 无 fatal/Chromium/JS 错误 | `app/mobile-shell.tsx`、`app/globals.css`、`scripts/debug-apk-cdp.mjs`、`docs/ANDROID_MOBILE_PRODUCT_DESIGN.md`、`artifacts/android/growth-loop-debug.apk` | v4 一屏 AI 首页原型满足本次移动产品设计要求；真实后端、通知、release 签名和真机适配仍待后续 |
+
 > 执行测试、交付或声明完成前必须读取本文件。没有新鲜证据时不得写成通过。
 > 不粘贴密钥、完整个人信息、原始顾客对话或未脱敏工具输出。
 

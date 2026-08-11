@@ -27,6 +27,7 @@ $adb = Join-Path $sdkRoot 'platform-tools\adb.exe'
 $emulator = Join-Path $sdkRoot 'emulator\emulator.exe'
 $avdManager = Join-Path $sdkRoot 'cmdline-tools\latest\bin\avdmanager.bat'
 $apk = Join-Path $projectRoot 'artifacts\android\growth-loop-debug.apk'
+$builtApk = Join-Path $projectRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
 
 function Require-Tool {
   param(
@@ -115,6 +116,8 @@ function Build-DebugApk {
     Pop-Location
   }
 
+  Require-Tool $builtApk 'Gradle debug APK'
+  Copy-Item -LiteralPath $builtApk -Destination $apk -Force
   Require-Tool $apk 'debug APK'
 }
 

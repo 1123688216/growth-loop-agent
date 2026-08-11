@@ -13,6 +13,6 @@
 
 当前推荐形态是“微信服务号对话入口 + 微信小程序结构化工作台 + 独立 Agent 后端”。经验值用于呈现长期成长，积分用于兑换用户自己设定的现实奖励，两者分账，防止短期激励污染长期成长评价。
 
-当前首页采用对话优先入口：随手记下今天发生的事，白天不被问题打断，晚间按 21:30 偏好由 AI 统一回顾；计划、成长、账本和完整测验退到二级入口。Android 工程位于 `android/`，debug APK 会输出到 `artifacts/android/growth-loop-debug.apk`；APK 调试脚本提供 `doctor / build / install / run / smoke / logs` 动作。
+当前首页采用一屏对话优先入口：只保留 AI 会面区、一个输入框、一个下一步动作和晚报状态；首页不产生纵向滚动，计划、成长、账本和完整测验退到二级入口，由 AI 在需要时主动展开。Android 工程位于 `android/`，debug APK 会输出到 `artifacts/android/growth-loop-debug.apk`；APK 调试脚本提供 `doctor / build / install / run / smoke / logs` 动作。
 
 本机网页请打开 `http://127.0.0.1:3000/`；只有 Android Emulator 内的 APK 使用 `http://10.0.2.2:3000/`。

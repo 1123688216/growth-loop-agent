@@ -50,11 +50,12 @@ const home = await evaluate(`(() => ({
   viewport: [innerWidth, innerHeight],
   bodyWidth: document.body.scrollWidth,
   documentWidth: document.documentElement.scrollWidth,
-  title: document.querySelector('h1')?.textContent || '',
-  hasNextMove: Boolean(document.querySelector('.app-mobile-v3-next-card')),
-  hasAiDock: Boolean(document.querySelector('.app-mobile-v3-ai-dock')),
-  hasNightReport: Boolean(document.querySelector('.app-mobile-v3-night-strip')),
-  hasFab: Boolean(document.querySelector('.app-mobile-v3-fab')),
+  title: document.querySelector('.app-mobile-v4-presence strong')?.textContent || '',
+  hasHomeV4: Boolean(document.querySelector('[data-mobile-home="v4"]')),
+  hasNextMove: Boolean(document.querySelector('.app-mobile-v4-next')),
+  hasAiComposer: Boolean(document.querySelector('.app-mobile-v4-composer textarea')),
+  hasNightReport: Boolean(document.querySelector('.app-mobile-v4-review-link')),
+  homeScrollFits: (() => { const node = document.querySelector('.app-mobile-v3-scroll.is-home'); return Boolean(node && node.scrollHeight <= node.clientHeight + 1); })(),
   tabs: [...document.querySelectorAll('.app-mobile-v3-tabbar button')].map((node) => node.textContent.trim())
 }))()`);
 
@@ -91,7 +92,7 @@ const growth = await evaluate(`(() => ({
   weekBars: document.querySelectorAll('.app-mobile-v3-week-bar').length
 }))()`);
 
-const result = { ok: home.root && home.hasNextMove && home.hasAiDock && home.hasNightReport && home.hasFab && home.tabs.length === 4 && home.bodyWidth === home.viewport[0] && home.documentWidth === home.viewport[0] && composer.open && composer.textareas === 1 && plan.hasGoal && plan.routeSteps === 3 && records.hasCapture && growth.hasRhythm, target: target.url, home, plan, records, composer, growth };
+const result = { ok: home.root && home.hasHomeV4 && home.hasNextMove && home.hasAiComposer && home.hasNightReport && home.homeScrollFits && home.tabs.length === 4 && home.bodyWidth === home.viewport[0] && home.documentWidth === home.viewport[0] && composer.open && composer.textareas === 1 && plan.hasGoal && plan.routeSteps === 3 && records.hasCapture && growth.hasRhythm, target: target.url, home, plan, records, composer, growth };
 console.log(JSON.stringify(result, null, 2));
 socket.close();
 if (!result.ok) process.exit(4);

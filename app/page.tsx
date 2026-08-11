@@ -455,13 +455,9 @@ export default function Home() {
       onSplitGoal={splitGoal}
       assistantReply={assistantReply}
       isAgentBusy={isAgentBusy}
-       onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)}
       reviewEnabled={reviewEnabled}
       onToggleReview={toggleReviewSchedule}
       onStartReview={startEveningReview}
-      pomodoroVisible={showPomodoro}
-      onTogglePomodoro={() => setShowPomodoro((visible) => !visible)}
-      pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
       isFocusRunning={isFocusRunning}
       onToggleFocus={toggleFocusSession}
       toast={toast}

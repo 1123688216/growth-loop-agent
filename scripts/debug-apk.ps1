@@ -106,6 +106,10 @@ switch ($Action) {
   'run' {
     if ($Build) { Invoke-AndroidHelper -HelperAction 'run' -WithBuild } else { Invoke-AndroidHelper -HelperAction 'run' }
     Invoke-ClearData
+    if ($ClearData) {
+      & $adb -s $serial shell monkey -p $packageName -c android.intent.category.LAUNCHER 1 | Out-Host
+      if ($LASTEXITCODE -ne 0) { throw 'Unable to relaunch the Android app after clearing data.' }
+    }
     Write-Host '[APK-DEBUG] app launched; emulator backend URL is http://10.0.2.2:3000/.' -ForegroundColor Green
   }
   'smoke' {
