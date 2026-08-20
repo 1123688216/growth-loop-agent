@@ -1,5 +1,10 @@
 # 项目版本
 
+## 文档交付补充（2026-08-20）
+
+- `0.2.0-prototype` 新增 public 仓库交接文档：README 负责使用者快速上手，`docs/DEVELOPER_HANDBOOK.md` 负责开发者/AI 的构建、API、微信、Android、测试和发布路径。
+- 证据：E-026；本轮文档提交后需要重新核对 GitHub `main` 的 commit 和文件内容。
+
 ## v4 兼容性补充（2026-08-11）
 
 - 当前 `0.2.0-prototype` 的 Android 移动基线升级为 v4：Capacitor/Next.js/API 保持兼容，移动首页改为固定视口的一屏 AI 会面区；二级路线、收集、节奏页面继续使用独立移动壳并允许局部滚动。

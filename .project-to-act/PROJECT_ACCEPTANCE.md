@@ -1,5 +1,13 @@
 # 项目验收
 
+## 文档交付验收补充（2026-08-20）
+
+| ID | 验收项 | 结果 | 证据 |
+|---|---|---|---|
+| A-028 | public GitHub 仓库应有可供新开发者和 AI 直接执行的 README 与完整手册 | 待发布校验 | `README.md` 覆盖快速启动、功能、API、LLM、微信、Android、测试、安全边界和 FAQ；`docs/DEVELOPER_HANDBOOK.md` 覆盖接手顺序、目录、调用链、回归命令、发布和已知限制 | E-026 |
+
+| E-026 | 2026-08-20 | README/手册内容审阅；`npm.cmd run typecheck`; `npm.cmd run lint`; `npm.cmd run build`; `git diff --check`; 敏感路径检查；GitHub 认证与远程分支核对 | 文档覆盖交接所需路径，命令与当前脚本/API 对齐；尚未完成本轮 commit/push 时记录为“待发布校验” | `README.md`、`docs/DEVELOPER_HANDBOOK.md`、`.env.example`、`scripts/debug-apk.ps1`、`scripts/debug-apk-cdp.mjs` | 文档内容和代码结构一致；发布后需补远程 commit、public 状态和远程文件核对结果 | 工作区、GitHub CLI、项目台账 |
+
 ## v4 验收补充（2026-08-11）
 
 | ID | 验收项 | 结果 | 证据 |
