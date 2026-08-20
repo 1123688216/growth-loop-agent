@@ -4,7 +4,7 @@
 
 | ID | 功能 | 优先级 | 状态 | 依赖 | 验收口径 | 证据 |
 |---|---|---|---|---|---|---|
-| F-034 | Public 仓库 README 与开发者/AI 手册 | P1 | 已完成（待发布校验） | F-032、F-033 | README 可从 clone 走到 Web/API/Android；手册覆盖目录、配置、回退、微信、Android smoke、测试、Git 发布、故障排查和限制；不包含密钥 | E-026 |
+| F-034 | Public 仓库 README 与开发者/AI 手册 | P1 | 已完成（已发布） | F-032、F-033 | README 可从 clone 走到 Web/API/Android；手册覆盖目录、配置、回退、微信、Android smoke、测试、Git 发布、故障排查和限制；不包含密钥；远程 `main` 可取得 | E-026 |
 
 ## v4 功能增量（2026-08-11）
 
@@ -65,6 +65,8 @@
 | F-032 | APK 公开发布与 AI 调试工具 | P1 | 已完成（发布准备） | F-027、F-028、F-031 | 公开仓库包含源码、Android 工程、debug APK、构建忽略规则和可供人/AI 使用的 `doctor/build/install/run/smoke/logs` 调试脚本；不包含密钥、本机 SDK 路径或构建目录 | E-024 |
 
 ## 功能变更历史
+
+- 2026-08-20｜F-034｜补齐 README 与开发者/AI 手册并发布到 public GitHub｜降低新开发者和 AI 接手时的上下文成本，明确命令、地址、回退和生产边界｜远程 `main` 已包含 README 与 `docs/DEVELOPER_HANDBOOK.md`，仍需随实现变化维护｜E-026｜来源：typecheck/lint/build、链接检查、GitHub Contents API。
 
 按时间倒序追加：日期、功能 ID、变化、原因、影响、证据 ID 和确认来源。
 

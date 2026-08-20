@@ -4,9 +4,9 @@
 
 | ID | 验收项 | 结果 | 证据 |
 |---|---|---|---|
-| A-028 | public GitHub 仓库应有可供新开发者和 AI 直接执行的 README 与完整手册 | 待发布校验 | `README.md` 覆盖快速启动、功能、API、LLM、微信、Android、测试、安全边界和 FAQ；`docs/DEVELOPER_HANDBOOK.md` 覆盖接手顺序、目录、调用链、回归命令、发布和已知限制 | E-026 |
+| A-028 | public GitHub 仓库应有可供新开发者和 AI 直接执行的 README 与完整手册 | 通过（文档已发布） | `README.md` 覆盖快速启动、功能、API、LLM、微信、Android、测试、安全边界和 FAQ；`docs/DEVELOPER_HANDBOOK.md` 覆盖接手顺序、目录、调用链、回归命令、发布和已知限制；远程 `main` 可取得两份文件 | E-026 |
 
-| E-026 | 2026-08-20 | README/手册内容审阅；`npm.cmd run typecheck`; `npm.cmd run lint`; `npm.cmd run build`; `git diff --check`; 敏感路径检查；GitHub 认证与远程分支核对 | 文档覆盖交接所需路径，命令与当前脚本/API 对齐；尚未完成本轮 commit/push 时记录为“待发布校验” | `README.md`、`docs/DEVELOPER_HANDBOOK.md`、`.env.example`、`scripts/debug-apk.ps1`、`scripts/debug-apk-cdp.mjs` | 文档内容和代码结构一致；发布后需补远程 commit、public 状态和远程文件核对结果 | 工作区、GitHub CLI、项目台账 |
+| E-026 | 2026-08-20 | README/手册内容审阅；`npm.cmd run typecheck`; `npm.cmd run lint`; `npm.cmd run build`; `git diff --check`; 敏感路径检查；GitHub 认证与远程分支核对；Contents API | 全部通过；仓库 `isPrivate=false`；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入远程 `main`；远程 README 10,504 bytes，手册 13,065 bytes，均可取得 | `README.md`、`docs/DEVELOPER_HANDBOOK.md`、`.env.example`、`scripts/debug-apk.ps1`、`scripts/debug-apk-cdp.mjs` | 文档交付通过；生产数据层、微信加密模式、release 签名和真机仍未验收 | 工作区、GitHub CLI、GitHub Contents API、项目台账 |
 
 ## v4 验收补充（2026-08-11）
 
@@ -100,6 +100,8 @@
 | G-002 | 2026-08-11 | 原型实现 Gate | `0.2.0-prototype` | 部分通过 | E-004～E-024 | 对话优先首页、单字段随手记、晚报统一三问、21:30 回顾入口、紧凑待办/日程、seed、受管 LLM、微信公众号文本回调、定向 Agent 语义解析、AI Agent 三阶段学习路线、运动/生活/休息分类、可选番茄钟、理解测验评分、Android debug APK、电脑模拟器调试链路、双地址说明、独立 Android 移动壳 v3、公开仓库和 AI 调试脚本已具备；真实数据库、多用户、后台定时通知、生产微信、公网 HTTPS、KILL 对应关系、路线/评分评测集、正式 Android 签名/真机、用户试验仍待后续 |
 
 ## 验收记录
+
+- 2026-08-20｜检查 README、开发者/AI 手册、当前 API/脚本命令和 GitHub 远程内容｜E-026｜typecheck、lint、build、diff/敏感路径检查通过；文档发布提交 `c3fc3ae` 已进入 public 仓库 `main`，两份文档可远程取得｜结论：源码与手册交付通过，生产 Gate 仍按原型边界部分通过。
 
 按时间倒序追加：日期、检查范围、证据 ID、结果、遗留问题和结论。失败、跳过与过期证据也必须如实记录。
 

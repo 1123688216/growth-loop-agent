@@ -3,7 +3,7 @@
 ## 文档交付补充（2026-08-20）
 
 - `0.2.0-prototype` 新增 public 仓库交接文档：README 负责使用者快速上手，`docs/DEVELOPER_HANDBOOK.md` 负责开发者/AI 的构建、API、微信、Android、测试和发布路径。
-- 证据：E-026；本轮文档提交后需要重新核对 GitHub `main` 的 commit 和文件内容。
+- 证据：E-026；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入 GitHub `main`，README 与开发手册均可远程取得。
 
 ## v4 兼容性补充（2026-08-11）
 
@@ -21,7 +21,7 @@
 
 - 版本号：`0.2.0-prototype`
 - 发布状态：GitHub public 已发布（产品仍为 `0.2.0-prototype`，非生产 release）
-- 兼容性说明：Next.js 16.3.0 + React 19.2.8；当前为本地原型，数据来自确定性 seed，单字段记录以浏览器 localStorage 回读，白天不自动出题，晚报通过受管 OpenAI-compatible profile 统一提问；微信公众号接口支持明文签名校验与 XML 文本回调；Android 通过 Capacitor 8.5.0 壳复用服务端，移动端使用独立 v3 视觉与交互，默认模拟器地址为 `10.0.2.2:3000`，正式上线前仍需公网 HTTPS、数据库、正式签名和官方账号审核
+- 兼容性说明：Next.js 16.3.0 + React 19.2.8；当前为本地原型，数据来自确定性 seed，单字段记录以浏览器 localStorage 回读，白天不自动出题，晚报通过受管 OpenAI-compatible profile 统一提问；微信公众号接口支持明文签名校验与 XML 文本回调；Android 通过 Capacitor 8.5.0 壳复用服务端，移动端使用独立 v4 视觉与交互，默认模拟器地址为 `10.0.2.2:3000`；README 与开发者/AI 手册已随源码发布，正式上线前仍需公网 HTTPS、数据库、正式签名和官方账号审核
 - 最后更新：2026-08-11
 
 ## 下一版本计划
@@ -33,6 +33,8 @@
 - 发布条件：本地端到端回放、真实测试账号回调通过、隐私/幂等/安全 Gate 通过
 
 ## 版本历史
+
+- `0.2.0-prototype`｜2026-08-20｜README 与开发者/AI 手册发布｜补齐 clone、配置、API、LLM、微信、Android、测试、故障排查、安全边界、Git 发布和交接模板；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入远程 `main`｜E-026｜源码文档交付通过，生产 Gate 仍部分通过。
 
 按时间倒序追加：版本号、日期、状态、主要变更、原因、兼容性、证据 ID 和 Gate 结果。
 

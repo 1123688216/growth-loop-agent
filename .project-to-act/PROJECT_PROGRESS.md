@@ -4,7 +4,7 @@
 
 | 任务 | 状态 | 负责人 | 完成条件 | 证据 ID | 最后更新 |
 |---|---|---|---|---|---|
-| README 与开发者/AI 手册 | 已完成（待发布校验） | Codex | README 覆盖启动、功能、API、LLM、微信、Android、安全和常见问题；手册覆盖接手、回归、发布和已知限制 | E-026 | 2026-08-20 |
+| README 与开发者/AI 手册 | 已完成（已发布） | Codex | README 覆盖启动、功能、API、LLM、微信、Android、安全和常见问题；手册覆盖接手、回归、发布和已知限制；GitHub `main` 已可远程取得 | E-026 | 2026-08-20 |
 
 ## v4 交付进度（2026-08-11）
 
@@ -71,6 +71,8 @@
 12. 配置 Android 的正式 HTTPS 后端与签名 keystore，补真机安装、断网/恢复和微信授权回归，再产出 release APK/AAB。
 
 ## 进度历史
+
+- 2026-08-20｜补齐 README 与开发者/AI 手册并推送 public GitHub｜E-026｜本地 typecheck/lint/build、链接/敏感路径检查通过；文档发布提交 `c3fc3aeece2bcaa8ca0dfb75dd0b308273d82d41` 已进入远程 `main`，仓库 `isPrivate=false`，README 与 `docs/DEVELOPER_HANDBOOK.md` 可通过 Contents API 取得｜下一步随 API、Android 网络策略和生产边界变化同步文档｜来源：GitHub CLI、git remote、工作区检查。
 
 按时间倒序追加：日期、完成事项、证据 ID、遗留问题、下一步和确认来源。不要覆盖旧记录。
 
