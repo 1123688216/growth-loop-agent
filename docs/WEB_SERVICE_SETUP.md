@@ -19,7 +19,7 @@
 - 把仓库当成 GitHub Pages 这类纯静态站点部署；
 - 只执行 `next build`，然后把某个目录当作静态网站上传。
 
-当前 API 路由需要 Node.js 服务端：`/api/agent`、`/api/quiz`、`/api/demo`、`/api/wechat` 和 `/api/wechat/status`。
+当前 API 路由需要 Node.js 服务端：`/api/agent`、`/api/quiz`、`/api/learning-program`、`/api/demo`、`/api/wechat` 和 `/api/wechat/status`。
 
 ## 2. 环境要求
 
@@ -97,10 +97,12 @@ Invoke-RestMethod http://127.0.0.1:3000/api/agent
 $root = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/
 $demo = Invoke-RestMethod http://127.0.0.1:3000/api/demo
 $agent = Invoke-RestMethod http://127.0.0.1:3000/api/agent
+$learningProgram = Invoke-RestMethod http://127.0.0.1:3000/api/learning-program
 
 "ROOT: $($root.StatusCode)"
 "DEMO: $($demo.mode) / $($demo.seedVersion)"
 "AGENT: $($agent.mode) / $($agent.provider)"
+"LEARNING_PROGRAM: $($learningProgram.configured) / $($learningProgram.provider)"
 ```
 
 预期结果：
@@ -108,6 +110,7 @@ $agent = Invoke-RestMethod http://127.0.0.1:3000/api/agent
 - `ROOT` 为 `200`；
 - `DEMO` 为 `seeded-demo`，并带有 seed 版本；
 - `AGENT` 在没有 LLM 配置时为 `demo / demo`。
+- `LEARNING_PROGRAM` 在没有 LLM 配置时为 `False / 未配置`，但页面仍可生成本地课程和规则评分。
 
 再做一次不依赖 LLM 的对话请求：
 

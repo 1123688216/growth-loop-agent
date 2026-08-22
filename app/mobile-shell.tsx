@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { demoSeed, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
 
-export type MobileTab = "今日" | "计划" | "记录" | "成长";
+export type MobileTab = "今日" | "计划" | "记录" | "成长" | "课程";
 
 type MobileLiveLog = {
   id: string;
@@ -61,6 +61,7 @@ type MobileAppShellProps = {
   isFocusRunning: boolean;
   onToggleFocus: () => void;
   toast: string;
+  learningStudio: ReactNode;
 };
 
 const mobileTabs: Array<{ label: MobileTab; icon: typeof LayoutDashboard; short: string }> = [
@@ -90,8 +91,14 @@ export default function MobileAppShell({
   isFocusRunning,
   onToggleFocus,
   toast,
+  learningStudio,
 }: MobileAppShellProps) {
   const [composerOpen, setComposerOpen] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [activeTab]);
 
   function openComposer(seed = "") {
     onNavigate("今日");
@@ -121,7 +128,7 @@ export default function MobileAppShell({
         </div>
       </header>
 
-      <div className={`app-mobile-v3-scroll ${isHome ? "is-home" : ""}`}>
+      <div ref={scrollRef} className={`app-mobile-v3-scroll ${isHome ? "is-home" : ""}`}>
         {activeTab === "今日" && (
           <MobileTodayV4
             tasks={tasks}
@@ -147,13 +154,15 @@ export default function MobileAppShell({
             onSplitGoal={onSplitGoal}
             onToggleFocus={onToggleFocus}
             isFocusRunning={isFocusRunning}
+            onOpenLearning={() => onNavigate("课程")}
           />
         )}
+        {activeTab === "课程" && learningStudio}
         {activeTab === "记录" && <MobileRecordsV3 logs={logs} onOpenComposer={() => openComposer()} />}
         {activeTab === "成长" && <MobileGrowthV3 earnedCoins={earnedCoins} />}
       </div>
 
-      {!isHome && <button className="app-mobile-v3-fab" onClick={() => openComposer()} aria-label="打开随手记录">
+      {!isHome && activeTab !== "课程" && <button className="app-mobile-v3-fab" onClick={() => openComposer()} aria-label="打开随手记录">
         <Plus size={20} strokeWidth={2.8} />
         <span>记录</span>
       </button>}
@@ -257,7 +266,7 @@ function MobileTaskV3({ task, onToggle }: { task: Task; onToggle: (id: string) =
   );
 }
 
-function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFocus, isFocusRunning }: { tasks: Task[]; doneCount: number; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onToggleFocus: () => void; isFocusRunning: boolean }) {
+function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFocus, isFocusRunning, onOpenLearning }: { tasks: Task[]; doneCount: number; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onToggleFocus: () => void; isFocusRunning: boolean; onOpenLearning: () => void }) {
   const goal = demoSeed.goals[0];
   return (
     <div className="app-mobile-v3-page app-mobile-v3-subpage">
@@ -274,6 +283,7 @@ function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFoc
         <div className="app-mobile-v3-route-step"><div className="app-mobile-v3-route-index">02</div><div><strong>连接工具与状态</strong><p>让 Agent 能够完成一次真实动作。</p></div><CircleCheck size={16} /></div>
         <div className="app-mobile-v3-route-step"><div className="app-mobile-v3-route-index">03</div><div><strong>跑通一次对话闭环</strong><p>从输入、判断到结果，留下可验证证据。</p></div><CircleCheck size={16} /></div>
       </section>
+      <button className="app-mobile-v3-learning-entry" onClick={onOpenLearning}><span><Sparkles size={16} /></span><div><small>AI 学习程序</small><strong>让 AI 为一个目标编排课程</strong><p>讲解、追问、练习和课后评分都在一条路径里。</p></div><ChevronRight size={17} /></button>
       <section className="app-mobile-v3-plan-section"><div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">TODAY</span><h2>{doneCount}/{tasks.length} 个动作完成</h2></div><button onClick={onToggleFocus}>{isFocusRunning ? "暂停" : "开始专注"}</button></div><div className="app-mobile-v3-task-list">{tasks.map((task) => <MobileTaskV3 key={task.id} task={task} onToggle={onToggleTask} />)}</div></section>
     </div>
   );

@@ -10,6 +10,7 @@
 |---|---|---|
 | AI 今日对话 | 记录事实、识别意图、给出下一步；无模型配置时使用规则回退 | `/api/agent`、首页 |
 | 学习闭环 | 学习记录 → 生成 2–3 道理解题 → LLM 或规则评分 → XP 回写 | `/api/quiz`、记录页 |
+| AI 学习程序 | 以任意学习目标生成课程路线、每节讲解/练习/交付物、AI 讲师和 3 道课后理解题；可把本节放入今日计划 | `/api/learning-program`、课程页 |
 | 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分 demo | `/api/demo`、首页/计划 |
 | 晚间回顾 | 统一总结当天记录，并依次追问最重要行动、真正理解和明日一步 | 首页晚报入口、Agent `review` 意图 |
 | 微信入口 | 微信公众号首次验证、明文 XML 文本回调、签名校验、LLM 超时回退 | `/api/wechat` |
@@ -20,6 +21,8 @@
 
 首页只做一件事：让用户马上告诉 AI 今天发生了什么。首页默认只显示 AI 状态、一个下一步行动、一个记录框和晚报状态；路线、记录、成长和完整测验放在二级入口，由 AI 在需要时引导用户进入。
 
+当用户有一个明确学习目标时，可从“课程”工作台（手机端位于“路线”的二级入口）进入 AI 学习程序。它不是一张静态课表：先由模型为主题编排教学骨架，再补成可执行的章节内容；每节都可向 AI 讲师追问、完成开放题并得到逐题反馈。课程状态目前保存在当前浏览器的 localStorage，刷新可回读，但不是多端同步或正式学习档案。
+
 ```mermaid
 flowchart LR
   User[用户] --> Home[今日首页 / 微信对话]
@@ -28,6 +31,8 @@ flowchart LR
   Agent --> Model[可选 OpenAI-compatible LLM]
   Home --> Quiz[/api/quiz]
   Quiz --> Model
+  Home --> Course[/api/learning-program]
+  Course --> Model
   WeChat[微信公众号] --> WechatAPI[/api/wechat]
   WechatAPI --> Agent
   Home --> Demo[/api/demo]
@@ -68,6 +73,8 @@ npm.cmd run start -- --hostname 127.0.0.1 --port 3000
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd run build
+# 有受管 LLM 配置时，实际生成一门 Agent 课程并完成讲师追问、课后评分
+npm.cmd run learning:smoke -- --require-llm
 ```
 
 ## 配置 LLM
@@ -129,6 +136,16 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/quiz -ContentType 
 
 评分时提交 `action=grade`、原题目、学习底稿和 `answers`。如果模型已配置，返回 `gradedBy=llm`；否则返回 `gradedBy=rules`，并明确给出回看建议。
 
+### AI 学习程序
+
+课程状态：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:3000/api/learning-program
+```
+
+生成课程、AI 讲师追问和课后评分都通过同一条 API 的 `generate`、`tutor`、`grade` 动作完成。默认的 Agent 示例会生成 5 节课程，每节含讲解、练习、交付物和 3 道开放题。完整调用契约、回退语义与实际 LLM 回归命令见 [AI 学习程序说明](docs/LEARNING_PROGRAM.md)。
+
 ### Demo 数据
 
 ```powershell
@@ -184,6 +201,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 |---|---|
 | [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | 从 clone、配置、开发、测试到发布的完整交接手册 |
 | [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 从干净 clone、环境变量到 Web/Node 服务验收；解释静态托管、API 和 Android 地址边界 |
+| [AI 学习程序](docs/LEARNING_PROGRAM.md) | 通用课程编排、AI 讲师、课后评分、API 契约与 LLM smoke |
 | [产品设计方案](docs/PRODUCT_DESIGN_V1.md) | 产品目标、用户闭环、Agent、游戏化和微信路线 |
 | [微信公众号接入](docs/WECHAT_INTEGRATION.md) | 微信服务器配置、签名校验和文本回调 |
 | [Android 构建](docs/ANDROID_BUILD.md) | SDK、AVD、Capacitor 和 Android Studio |

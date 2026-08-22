@@ -34,6 +34,8 @@ import {
 } from "lucide-react";
 import { demoSeed, initialTasks, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
+import type { CourseLesson } from "@/lib/learning-program/types";
+import LearningStudio from "./learning-studio";
 import MobileAppShell, { type MobileTab } from "./mobile-shell";
 
 type Tab = MobileTab;
@@ -113,6 +115,7 @@ function writeStoredLogs(logs: LogEntry[]) {
 const tabs: Array<{ label: Tab; icon: typeof LayoutDashboard }> = [
   { label: "今日", icon: LayoutDashboard },
   { label: "计划", icon: CalendarDays },
+  { label: "课程", icon: Brain },
   { label: "记录", icon: BookOpen },
   { label: "成长", icon: Trophy },
 ];
@@ -120,6 +123,7 @@ const tabs: Array<{ label: Tab; icon: typeof LayoutDashboard }> = [
 const tabCopy: Record<Tab, { eyebrow: string; suffix: string; description: string }> = {
   今日: { eyebrow: "今日回路", suffix: "只推进一件重要的事", description: "把注意力放在下一步，完成之后，进步自然会留下痕迹。" },
   计划: { eyebrow: "计划地图", suffix: "让长期目标落到今天", description: "目标不是另一张待办清单，它要能告诉你下一步为什么值得做。" },
+  课程: { eyebrow: "AI 学习程序", suffix: "把目标变成可交付的能力", description: "从你想学会的一件事开始，AI 会编排课程、陪你理解，并用课后题检查迁移能力。" },
   记录: { eyebrow: "成长档案", suffix: "把事实留下来", description: "每一条记录都是以后判断进步时可以回看的证据。" },
   成长: { eyebrow: "成长仪表盘", suffix: "看见节奏，而不是给自己打分", description: "用近 7 天的行动和证据，找到下一轮最值得尝试的调整。" },
 };
@@ -440,6 +444,25 @@ export default function Home() {
     notify(`已把「${goal.title}」拆成一个明天可执行的行动`);
   }
 
+  function addCourseLessonToToday(lesson: CourseLesson) {
+    const taskId = `course-${lesson.id}`;
+    setTasks((current) => current.some((task) => task.id === taskId) ? current : [
+      ...current,
+      {
+        id: taskId,
+        title: `课程 · ${lesson.title}`,
+        subtitle: lesson.deliverable,
+        time: "今天",
+        duration: `${lesson.durationMinutes} min`,
+        xp: 18,
+        coin: 6,
+        status: "upcoming",
+        kind: "learn",
+      },
+    ]);
+    notify(`已把「${lesson.title}」放进今日计划`);
+  }
+
   if (isMobileExperience) {
     return <MobileAppShell
       activeTab={activeTab}
@@ -461,6 +484,7 @@ export default function Home() {
       isFocusRunning={isFocusRunning}
       onToggleFocus={toggleFocusSession}
       toast={toast}
+      learningStudio={<LearningStudio compact onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} />}
     />;
   }
 
@@ -547,6 +571,8 @@ export default function Home() {
             <PlanPanel tasks={tasks} onToggleTask={toggleTask} onSplitGoal={splitGoal} onBackToToday={() => setActiveTab("今日")} />
           ) : activeTab === "记录" ? (
             <RecordsPanel logs={logs} input={input} setInput={setInput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
+          ) : activeTab === "课程" ? (
+            <LearningStudio onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} />
           ) : (
             <GrowthPanel onBackToToday={() => setActiveTab("今日")} />
           )}

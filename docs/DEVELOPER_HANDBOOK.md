@@ -24,6 +24,7 @@ app/
   globals.css                 桌面与移动视觉样式
   api/agent/route.ts          Agent 对话 API
   api/quiz/route.ts           出题与评分 API
+  api/learning-program/route.ts AI 学习程序：课程、讲师、评分 API
   api/demo/route.ts           确定性 demo 数据 API
   api/wechat/route.ts         微信签名、XML 回调和回复
   api/wechat/status/route.ts  非敏感配置状态
@@ -33,6 +34,8 @@ lib/
   agent/understanding.ts      意图、类别和 AI Agent 路线解析
   agent/session.ts            本机原型会话状态
   agent/quiz.ts               出题、JSON 解析、LLM/规则评分
+  learning-program/types.ts   课程、章节、题目、讲师与评分契约
+  learning-program/service.ts 通用课程编排、LLM 回退、讲师与评分服务
   wechat/adapter.ts           微信 XML 与 SHA-1 签名工具
 android/                      Capacitor Android 工程
 artifacts/android/            已提交的 debug APK
@@ -86,6 +89,7 @@ npm.cmd run build
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/
 Invoke-RestMethod http://127.0.0.1:3000/api/demo
 Invoke-RestMethod http://127.0.0.1:3000/api/agent
+Invoke-RestMethod http://127.0.0.1:3000/api/learning-program
 ```
 
 没有 LLM 配置时，`/api/agent` 返回 `mode=demo` 和规则回复是预期结果，不是服务故障。静态文件能打开但这些 API 失败，说明启动方式不正确或反向代理没有转发 `/api/*`。
@@ -191,6 +195,24 @@ Invoke-RestMethod http://127.0.0.1:3000/api/demo | ConvertTo-Json -Depth 8
 Invoke-RestMethod http://127.0.0.1:3000/api/wechat/status | ConvertTo-Json
 ```
 
+### 5.5 AI 学习程序
+
+`/api/learning-program` 有三种 POST 动作：
+
+- `generate`：用 `subject`、`goal`、可选 `background`、`weeklyHours` 和 `lessonCount` 生成课程；最多 5 节。
+- `tutor`：携带 `course`、`lessonId` 和 `message`，获得当前章节的 AI 讲师回答。
+- `grade`：携带 `course`、`lessonId` 和 `answers`，获得逐题反馈与总分。
+
+模型先返回紧凑的主题教学骨架，服务再补足稳定的学习行为框架，避免大教案单请求超时。无模型或模型异常时，`program.mode=rules`、`reply.mode=rules`、`gradedBy=rules` 是可用回退；不得把它报告为模型回归成功。
+
+启动 Web 服务后，真实模型回归使用：
+
+```powershell
+npm.cmd run learning:smoke -- --require-llm
+```
+
+该脚本只使用内置的 Agent 课程样例，不读取或输出 Secret；它同时断言课程、讲师和评分均实际走 LLM。详细契约见 [AI 学习程序说明](LEARNING_PROGRAM.md)。
+
 ## 6. 微信接入流程
 
 ### 6.1 本地代码边界
@@ -281,6 +303,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 | 普通 TypeScript/React | `npm.cmd run typecheck`、`npm.cmd run lint`、`npm.cmd run build` |
 | Agent/LLM | 上述三项 + `/api/agent` 状态/正常/空输入/回退请求 |
 | 测验 | `/api/quiz` generate + grade，确认 `gradedBy` 与反馈结构 |
+| AI 学习程序 | `GET /api/learning-program`；无模型 generate/tutor/grade 回退；有模型时 `npm.cmd run learning:smoke -- --require-llm` |
 | 微信 | `/api/wechat/status`、签名正反例、明文 XML 文本回调 |
 | Android/UI | `npm.cmd run android:debug`、`doctor`、`smoke`、`logs`、截图视觉复核 |
 | 发布 | `git diff --check`、敏感路径检查、GitHub 远程文件与 commit 核对 |
