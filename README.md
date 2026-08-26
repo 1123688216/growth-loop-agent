@@ -4,14 +4,47 @@
 
 > 当前版本是可运行的本地原型，不是生产 SaaS。项目已经包含 Next.js Web、Capacitor Android 工程、确定性 demo 数据、OpenAI-compatible LLM 接口、微信公众号明文回调、理解测验和电脑 Android Emulator 调试链路。
 
+## 变更记录
+
+后续每次功能、接口、数据结构或运行方式发生变化，都必须同步更新本节。标记含义：`新增` 表示新能力，`修改` 表示既有行为变化，`修复` 表示缺陷修正，`暂未实现` 表示已经确定但尚未落地的边界。
+
+### 2026-08-26 · 数据库与账号系统（未发布）
+
+| 标记 | 改动 | 主要位置 |
+|---|---|---|
+| **新增** | 使用 username 和密码注册、登录、退出，不再依赖邮箱 | `app/login/`、`app/api/auth/` |
+| **新增** | 密码属于 User，但仅保存经过 scrypt 处理的 `password_hash`，不保存明文 | `lib/auth/password.ts`、`lib/db/schema.ts` |
+| **新增** | 数据库 Session 和 HttpOnly Cookie；默认会话有效期为 30 天 | `lib/auth/session.ts`、`sessions` 表 |
+| **新增** | SQLite 用户数据层及迁移机制 | `lib/db/`、`data/growth-loop.sqlite` |
+| **新增** | 首批表：`users`、`sessions`、`goals`、`tasks`、`activity_logs`、`ledger_entries` | `lib/db/schema.ts` |
+| **修改** | 首页改为受保护页面；未登录访问 `/` 会跳转到 `/login` | `app/page.tsx` |
+| **修改** | 工作台从数据库读取当前用户、目标、任务、记录、积分和近七天统计 | `/api/dashboard`、`lib/db/dashboard.ts` |
+| **修改** | 任务完成状态、学习记录、XP、Coin 和连续有效行动天数刷新后仍会保留 | `/api/tasks/[id]`、`/api/activity-logs` |
+| **修改** | 桌面端与移动端均提供退出登录入口 | `app/dashboard-client.tsx`、`app/mobile-shell.tsx` |
+| **修改** | `.env.example` 增加 SQLite 路径和本地 HTTP Cookie 配置；数据库文件不提交 Git | `.env.example`、`.gitignore` |
+| **暂未实现** | LLM 可以提出目标进度，但“服务端校验后写入 `goals.progress_percent`”尚未接入 | 后续目标进度接口 |
+
+本次端到端验证覆盖：创建账号、账号密码登录、退出、未登录访问保护、任务状态持久化、学习记录持久化、积分流水和连续行动天数更新。验收使用的临时账号及数据已删除。
+
+### 2026-08-26 · fork 功能兼容迁移（未发布）
+
+| 标记 | 改动 | 主要位置 |
+|---|---|---|
+| **修改** | 将数据库与账号功能迁入个人 fork，同时保留 fork 已有的 AI 学习程序 | `app/dashboard-client.tsx`、`app/mobile-shell.tsx` |
+| **修改** | 登录后的桌面端和移动端继续提供“课程”入口，课程可加入今日计划 | `app/learning-studio.tsx`、`/api/learning-program` |
+| **修复** | 避免直接覆盖 fork 中已经修改的 README、页面、移动端外壳和样式 | 三方合并迁移 |
+| **修复** | 排除 IntelliJ IDEA 的本机项目配置，避免误提交 `.idea` | `.gitignore` |
+
 ## 现在能做什么
 
 | 能力 | 当前实现 | 入口 |
 |---|---|---|
+| 本地账号 | username 注册/登录、密码哈希、数据库会话、用户数据隔离 | `/login`、`/api/auth/*` |
 | AI 今日对话 | 记录事实、识别意图、给出下一步；无模型配置时使用规则回退 | `/api/agent`、首页 |
 | 学习闭环 | 学习记录 → 生成 2–3 道理解题 → LLM 或规则评分 → XP 回写 | `/api/quiz`、记录页 |
 | AI 学习程序 | 以任意学习目标生成课程路线、每节讲解/练习/交付物、AI 讲师和 3 道课后理解题；可把本节放入今日计划 | `/api/learning-program`、课程页 |
-| 今日行动 | 计划、待办、学习/运动/生活/休息分类、XP 与积分 demo | `/api/demo`、首页/计划 |
+| 今日行动 | 用户目标、计划、待办和任务完成状态持久化 | `/api/dashboard`、`/api/tasks/[id]`、首页/计划 |
+| 成长记录 | 学习记录、连续有效行动、XP 与 Coin 流水持久化 | `/api/activity-logs`、记录页/成长页 |
 | 晚间回顾 | 统一总结当天记录，并依次追问最重要行动、真正理解和明日一步 | 首页晚报入口、Agent `review` 意图 |
 | 微信入口 | 微信公众号首次验证、明文 XML 文本回调、签名校验、LLM 超时回退 | `/api/wechat` |
 | Android App | 独立移动壳 v4；首页一屏 AI 会面，不堆功能、不产生首页纵向滚动 | `android/`、APK |
@@ -58,7 +91,7 @@ Copy-Item -LiteralPath .env.example -Destination .env.local
 npm.cmd run dev
 ```
 
-打开 [http://127.0.0.1:3000/](http://127.0.0.1:3000/)。默认 `LLM_PROVIDER=demo`，不需要 API Key；页面会加载内置确定性测试数据。生产式本地回归可以使用：
+打开 [http://127.0.0.1:3000/login](http://127.0.0.1:3000/login)，先创建本地账号。默认 `LLM_PROVIDER=demo`，不需要 API Key；新账号会初始化一个入门目标和三项入门行动。生产式本地回归可以使用：
 
 ```powershell
 npm.cmd run build
@@ -101,6 +134,20 @@ Invoke-RestMethod http://127.0.0.1:3000/api/agent
 返回值只包含模式、供应商和是否配置 endpoint/model 等非敏感状态，不返回 API Key。
 
 ## API 速查
+
+### 账号与用户数据
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/auth/register` | 使用 username、password 和可选 displayName 创建账号 |
+| `POST` | `/api/auth/login` | 使用 username 和 password 登录 |
+| `POST` | `/api/auth/logout` | 删除当前数据库会话并清除 Cookie |
+| `GET` | `/api/auth/me` | 获取当前登录用户的非敏感信息 |
+| `GET` | `/api/dashboard` | 获取当前用户的目标、任务、记录、积分和统计 |
+| `PATCH` | `/api/tasks/[id]` | 切换当前用户所属任务的完成状态 |
+| `POST` | `/api/activity-logs` | 调用 Agent 整理输入，并保存行动记录和奖励流水 |
+
+SQLite 默认保存在 `data/growth-loop.sqlite`。可通过 `.env.local` 中的 `SQLITE_DATABASE_PATH` 修改位置。数据库文件、WAL 和 SHM 文件均已加入 Git 忽略。
 
 ### Agent 对话
 
@@ -152,7 +199,7 @@ Invoke-RestMethod http://127.0.0.1:3000/api/learning-program
 Invoke-RestMethod http://127.0.0.1:3000/api/demo
 ```
 
-该接口提供目标、任务、记录和账本的确定性 seed，只用于原型验收，不代表真实用户数据层。
+该接口继续提供确定性 seed，主要用于无账号 demo 和原型验收。登录后的工作台数据以 `/api/dashboard` 和 SQLite 为准，不再把 `/api/demo` 当作真实用户数据层。
 
 ## 微信公众号接入
 
@@ -211,7 +258,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 
 ## 数据、安全与发布边界
 
-- demo 数据来自 `lib/demo-data.ts`，浏览器记录原型使用 localStorage；当前没有真实数据库、多用户隔离、后台定时任务或数据导出链路。
+- 已有 SQLite 数据库和基于 Session 的本地多用户隔离；当前仍没有后台定时任务、数据导出、忘记密码或管理员系统。
+- 密码字段保存在 `users.password_hash`，使用 scrypt 加盐处理；任何代码和文档都不得记录用户明文密码。
+- `action_streak_days` 表示连续产生有效行动记录的天数，不是单纯点击按钮的签到天数。
+- `goals.progress_percent` 已持久化；LLM 自动调整进度仍需增加服务端范围、证据和变化幅度校验。
 - LLM 只负责理解、建议、出题和评分；任务、XP、积分等写操作应继续由规则和受控服务端处理。
 - 不要提交 `.env.local`、API Key、微信 Token、`android/local.properties`、Android build 目录、模拟器镜像或本机 SDK 路径。
 - 微信回调当前只支持明文文本；不要在未补齐加密、重放保护、限流和审计前接收生产敏感消息。
@@ -233,8 +283,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 1. 从 `main` 创建短分支，修改前先阅读 `AGENTS.md` 和相关 `.project-to-act` 文档。
 2. 只提交本次任务范围内的文件，避免把密钥、构建产物和模拟器缓存带入提交。
 3. 至少运行 `typecheck`、`lint`、`build`；涉及 Android 时再运行 `android:debug`、`doctor`、`smoke`、`logs`。
-4. 提交信息说明意图，PR 描述列出变更、验证命令和已知边界。
+4. 每次功能、接口、数据库结构或运行方式发生变化，都要在 README 的“变更记录”中标注 `新增`、`修改`、`修复` 或 `暂未实现`。
+5. 提交信息说明意图，PR 描述列出变更、验证命令和已知边界。
 
 ## 当前版本
 
-`0.2.0-prototype` · Android 移动壳 v4 · public GitHub 源码与 debug APK 已交付。生产数据库、后台调度、微信加密模式、release 签名和真实用户验收属于后续版本范围。
+`0.2.0-prototype` · Android 移动壳 v4 · 已加入本地 SQLite、username 账号、数据库 Session 与首批用户数据持久化。生产级数据库、后台调度、微信加密模式、release 签名和真实用户验收属于后续版本范围。

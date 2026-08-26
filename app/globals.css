@@ -18,6 +18,9 @@
 }
 
 * { box-sizing: border-box; }
+.profile-menu-button, .avatar-button { border: 0; font: inherit; cursor: pointer; }
+.profile-menu-button { display: grid; width: 30px; height: 30px; place-items: center; margin-left: auto; border-radius: 9px; color: inherit; background: transparent; }
+.profile-menu-button:hover { background: rgba(255,255,255,.07); }
 html { min-height: 100%; background: var(--paper); }
 body { min-height: 100%; margin: 0; overflow: hidden; background: var(--paper); color: var(--ink); font-family: 'Manrope', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
 button, textarea { font: inherit; }

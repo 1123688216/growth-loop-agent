@@ -25,7 +25,7 @@ import {
   Trophy,
   X,
 } from "lucide-react";
-import { demoSeed, type Goal, type Task, type TaskKind, weeklyBars } from "@/lib/demo-data";
+import { type DemoSeed, type Goal, type Task, type TaskKind } from "@/lib/demo-data";
 
 export type MobileTab = "今日" | "计划" | "记录" | "成长" | "课程";
 
@@ -42,6 +42,7 @@ type MobileLiveLog = {
 };
 
 type MobileAppShellProps = {
+  dashboard: DemoSeed;
   activeTab: MobileTab;
   onNavigate: (tab: MobileTab) => void;
   tasks: Task[];
@@ -60,6 +61,7 @@ type MobileAppShellProps = {
   onStartReview: () => void;
   isFocusRunning: boolean;
   onToggleFocus: () => void;
+  onLogout: () => void;
   toast: string;
   learningStudio: ReactNode;
 };
@@ -72,6 +74,7 @@ const mobileTabs: Array<{ label: MobileTab; icon: typeof LayoutDashboard; short:
 ];
 
 export default function MobileAppShell({
+  dashboard,
   activeTab,
   onNavigate,
   tasks,
@@ -90,6 +93,7 @@ export default function MobileAppShell({
   onStartReview,
   isFocusRunning,
   onToggleFocus,
+  onLogout,
   toast,
   learningStudio,
 }: MobileAppShellProps) {
@@ -123,14 +127,15 @@ export default function MobileAppShell({
           <span>成长回路</span>
         </div>
         <div className="app-mobile-v3-top-actions">
-          <span className="app-mobile-v3-streak"><Flame size={14} /> {demoSeed.user.streak}</span>
-          <button className="app-mobile-v3-avatar" aria-label="打开个人资料">{demoSeed.user.displayName.slice(0, 1)}</button>
+          <span className="app-mobile-v3-streak"><Flame size={14} /> {dashboard.user.streak}</span>
+          <button className="app-mobile-v3-avatar" type="button" aria-label="退出登录" title="退出登录" onClick={onLogout}>{dashboard.user.displayName.slice(0, 1)}</button>
         </div>
       </header>
 
       <div ref={scrollRef} className={`app-mobile-v3-scroll ${isHome ? "is-home" : ""}`}>
         {activeTab === "今日" && (
           <MobileTodayV4
+            dashboard={dashboard}
             tasks={tasks}
             doneCount={doneCount}
             input={input}
@@ -148,6 +153,7 @@ export default function MobileAppShell({
         )}
         {activeTab === "计划" && (
           <MobilePlanV3
+            dashboard={dashboard}
             tasks={tasks}
             doneCount={doneCount}
             onToggleTask={onToggleTask}
@@ -158,8 +164,8 @@ export default function MobileAppShell({
           />
         )}
         {activeTab === "课程" && learningStudio}
-        {activeTab === "记录" && <MobileRecordsV3 logs={logs} onOpenComposer={() => openComposer()} />}
-        {activeTab === "成长" && <MobileGrowthV3 earnedCoins={earnedCoins} />}
+        {activeTab === "记录" && <MobileRecordsV3 dashboard={dashboard} logs={logs} onOpenComposer={() => openComposer()} />}
+        {activeTab === "成长" && <MobileGrowthV3 dashboard={dashboard} earnedCoins={earnedCoins} />}
       </div>
 
       {!isHome && activeTab !== "课程" && <button className="app-mobile-v3-fab" onClick={() => openComposer()} aria-label="打开随手记录">
@@ -192,6 +198,7 @@ export default function MobileAppShell({
 }
 
 function MobileTodayV4({
+  dashboard,
   tasks,
   doneCount,
   input,
@@ -206,6 +213,7 @@ function MobileTodayV4({
   isFocusRunning,
   onToggleFocus,
 }: {
+  dashboard: DemoSeed;
   tasks: Task[];
   doneCount: number;
   input: string;
@@ -225,8 +233,8 @@ function MobileTodayV4({
   return (
     <div className="app-mobile-v4-home" data-mobile-home="v4">
       <section className="app-mobile-v4-meta" aria-label="今日状态">
-        <div className="app-mobile-v4-date"><span className="app-mobile-v4-mini-mark"><Sparkles size={12} /></span><strong>今天</strong><span>{demoSeed.user.weekdayLabel} · {demoSeed.user.dateLabel}</span></div>
-        <span className="app-mobile-v4-streak"><Flame size={13} /> 连续 {demoSeed.user.streak} 天</span>
+        <div className="app-mobile-v4-date"><span className="app-mobile-v4-mini-mark"><Sparkles size={12} /></span><strong>今天</strong><span>{dashboard.user.weekdayLabel} · {dashboard.user.dateLabel}</span></div>
+        <span className="app-mobile-v4-streak"><Flame size={13} /> 连续 {dashboard.user.streak} 天</span>
       </section>
 
       <section className="app-mobile-v4-stage" aria-label="AI 今日对话">
@@ -266,8 +274,8 @@ function MobileTaskV3({ task, onToggle }: { task: Task; onToggle: (id: string) =
   );
 }
 
-function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFocus, isFocusRunning, onOpenLearning }: { tasks: Task[]; doneCount: number; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onToggleFocus: () => void; isFocusRunning: boolean; onOpenLearning: () => void }) {
-  const goal = demoSeed.goals[0];
+function MobilePlanV3({ dashboard, tasks, doneCount, onToggleTask, onSplitGoal, onToggleFocus, isFocusRunning, onOpenLearning }: { dashboard: DemoSeed; tasks: Task[]; doneCount: number; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onToggleFocus: () => void; isFocusRunning: boolean; onOpenLearning: () => void }) {
+  const goal = dashboard.goals[0] || { id: "starter-goal", title: "建立第一个学习目标", description: "告诉 AI 你想达到什么结果。", progress: 0, horizon: "首次成长回路", status: "进行中" as const };
   return (
     <div className="app-mobile-v3-page app-mobile-v3-subpage">
       <section className="app-mobile-v3-page-title"><span className="app-mobile-v3-label">ROADMAP</span><h1>把目标放到今天。</h1><p>路线不是待办清单，它只需要告诉你下一步往哪里走。</p></section>
@@ -289,33 +297,33 @@ function MobilePlanV3({ tasks, doneCount, onToggleTask, onSplitGoal, onToggleFoc
   );
 }
 
-function MobileRecordsV3({ logs, onOpenComposer }: { logs: MobileLiveLog[]; onOpenComposer: () => void }) {
-  const understandingCount = demoSeed.learningLogs.filter((log) => log.evidence !== "输入").length + logs.filter((log) => log.output).length;
+function MobileRecordsV3({ dashboard, logs, onOpenComposer }: { dashboard: DemoSeed; logs: MobileLiveLog[]; onOpenComposer: () => void }) {
+  const understandingCount = dashboard.learningLogs.filter((log) => log.evidence !== "输入").length + logs.filter((log) => log.output).length;
   const allRecords = [
     ...logs.map((log) => ({ id: log.id, topic: log.topic, body: log.text, tag: log.output ? "已整理" : "已记录", time: log.createdAt, xp: log.xp, live: true })),
-    ...demoSeed.learningLogs.map((log) => ({ id: log.id, topic: log.topic, body: log.summary, tag: log.evidence === "应用" ? "实际应用" : log.evidence === "输入 + 输出" ? "理解回应" : "行动记录", time: log.occurredAt, xp: log.xp, live: false })),
+    ...dashboard.learningLogs.map((log) => ({ id: log.id, topic: log.topic, body: log.summary, tag: log.evidence === "应用" ? "实际应用" : log.evidence === "输入 + 输出" ? "理解回应" : "行动记录", time: log.occurredAt, xp: log.xp, live: false })),
   ];
   return (
     <div className="app-mobile-v3-page app-mobile-v3-subpage">
       <section className="app-mobile-v3-page-title"><span className="app-mobile-v3-label">CAPTURE</span><h1>把今天收进来。</h1><p>想到什么就记什么，晚报会替你把零散片段串成进步。</p></section>
       <button className="app-mobile-v3-capture-cta" onClick={onOpenComposer}><span className="app-mobile-v3-capture-icon"><Plus size={19} /></span><span><strong>刚刚发生了什么？</strong><small>学习、运动、生活、休息，都可以</small></span><ArrowRight size={17} /></button>
-      <section className="app-mobile-v3-record-stats"><div><span>本周片段</span><strong>{allRecords.length}</strong></div><div><span>理解记录</span><strong>{understandingCount}</strong></div><div><span>获得 XP</span><strong>{demoSeed.learningLogs.reduce((total, log) => total + log.xp, 0) + logs.reduce((total, log) => total + log.xp, 0)}</strong></div></section>
+      <section className="app-mobile-v3-record-stats"><div><span>本周片段</span><strong>{allRecords.length}</strong></div><div><span>理解记录</span><strong>{understandingCount}</strong></div><div><span>获得 XP</span><strong>{dashboard.learningLogs.reduce((total, log) => total + log.xp, 0) + logs.reduce((total, log) => total + log.xp, 0)}</strong></div></section>
       <section className="app-mobile-v3-timeline"><div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">RECENT</span><h2>成长时间线</h2></div><MoreHorizontal size={18} /></div>{allRecords.map((record) => <article className={`app-mobile-v3-timeline-item ${record.live ? "is-live" : ""}`} key={record.id}><div className="app-mobile-v3-timeline-dot" /><div className="app-mobile-v3-timeline-body"><div className="app-mobile-v3-timeline-top"><strong>{record.topic}</strong><span>+{record.xp} XP</span></div><p>{record.body}</p><div className="app-mobile-v3-timeline-meta"><span>{record.tag}</span><time>{record.time}</time></div></div></article>)}</section>
     </div>
   );
 }
 
-function MobileGrowthV3({ earnedCoins }: { earnedCoins: number }) {
-  const totalMinutes = weeklyBars.reduce((total, bar) => total + Number.parseInt(bar.label, 10), 0);
-  const understandingCount = demoSeed.learningLogs.filter((log) => log.evidence !== "输入").length;
+function MobileGrowthV3({ dashboard, earnedCoins }: { dashboard: DemoSeed; earnedCoins: number }) {
+  const totalMinutes = dashboard.weeklyBars.reduce((total, bar) => total + Number.parseInt(bar.label, 10), 0);
+  const understandingCount = dashboard.learningLogs.filter((log) => log.evidence !== "输入").length;
   const rhythm = 68;
   return (
     <div className="app-mobile-v3-page app-mobile-v3-subpage">
       <section className="app-mobile-v3-page-title"><span className="app-mobile-v3-label">YOUR RHYTHM</span><h1>看见自己的节奏。</h1><p>成长不是把每一天塞满，而是知道什么让你继续往前。</p></section>
-      <section className="app-mobile-v3-rhythm-card"><div className="app-mobile-v3-rhythm-orbit" style={{ "--rhythm-progress": `${rhythm * 3.6}deg` } as React.CSSProperties}><div><strong>{rhythm}</strong><span>本周节奏</span></div></div><div className="app-mobile-v3-rhythm-copy"><span>当前等级 · LV {demoSeed.user.level}</span><h2>{demoSeed.user.role}</h2><p>距离下一级还差 84 XP</p><div className="app-mobile-v3-rhythm-track"><b style={{ width: "68%" }} /></div></div></section>
-      <div className="app-mobile-v3-stat-grid"><div><Flame size={16} /><span>连续有效行动</span><strong>{demoSeed.user.streak}<small> 天</small></strong></div><div><Clock3 size={16} /><span>本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small>{totalMinutes % 60}<small>m</small></strong></div><div><BookOpen size={16} /><span>理解记录</span><strong>{understandingCount}<small> 条</small></strong></div><div><Trophy size={16} /><span>成长积分</span><strong>{demoSeed.user.coinBalance + earnedCoins}<small> coin</small></strong></div></div>
-      <section className="app-mobile-v3-week-card"><div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">LAST 7 DAYS</span><h2>投入的形状</h2></div><BarChart3 size={17} /></div><div className="app-mobile-v3-week-bars">{weeklyBars.map((bar, index) => <div className="app-mobile-v3-week-bar" key={bar.day}><span>{bar.label}</span><i><b className={index === 3 ? "is-highlight" : ""} style={{ height: `${bar.value}%` }} /></i><small>{bar.day}</small></div>)}</div></section>
-      <section className="app-mobile-v3-insight"><span className="app-mobile-v3-insight-icon"><Sparkles size={16} /></span><div><span className="app-mobile-v3-label">AI OBSERVATION</span><p>{demoSeed.insight}</p></div></section>
+      <section className="app-mobile-v3-rhythm-card"><div className="app-mobile-v3-rhythm-orbit" style={{ "--rhythm-progress": `${rhythm * 3.6}deg` } as React.CSSProperties}><div><strong>{rhythm}</strong><span>本周节奏</span></div></div><div className="app-mobile-v3-rhythm-copy"><span>当前等级 · LV {dashboard.user.level}</span><h2>{dashboard.user.role}</h2><p>从第一条可验证行动开始</p><div className="app-mobile-v3-rhythm-track"><b style={{ width: `${Math.max(4, dashboard.user.focusScore)}%` }} /></div></div></section>
+      <div className="app-mobile-v3-stat-grid"><div><Flame size={16} /><span>连续有效行动</span><strong>{dashboard.user.streak}<small> 天</small></strong></div><div><Clock3 size={16} /><span>本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small>{totalMinutes % 60}<small>m</small></strong></div><div><BookOpen size={16} /><span>理解记录</span><strong>{understandingCount}<small> 条</small></strong></div><div><Trophy size={16} /><span>成长积分</span><strong>{dashboard.user.coinBalance + earnedCoins}<small> coin</small></strong></div></div>
+      <section className="app-mobile-v3-week-card"><div className="app-mobile-v3-block-heading"><div><span className="app-mobile-v3-label">LAST 7 DAYS</span><h2>投入的形状</h2></div><BarChart3 size={17} /></div><div className="app-mobile-v3-week-bars">{dashboard.weeklyBars.map((bar, index) => <div className="app-mobile-v3-week-bar" key={bar.day}><span>{bar.label}</span><i><b className={index === 6 ? "is-highlight" : ""} style={{ height: `${bar.value}%` }} /></i><small>{bar.day}</small></div>)}</div></section>
+      <section className="app-mobile-v3-insight"><span className="app-mobile-v3-insight-icon"><Sparkles size={16} /></span><div><span className="app-mobile-v3-label">AI OBSERVATION</span><p>{dashboard.insight}</p></div></section>
     </div>
   );
 }
