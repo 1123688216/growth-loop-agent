@@ -8,6 +8,9 @@ out/
 coverage/
 *.tsbuildinfo
 .android-build/
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 /.env.local
 
 # Android/Capacitor generated files and machine-local SDK paths.
