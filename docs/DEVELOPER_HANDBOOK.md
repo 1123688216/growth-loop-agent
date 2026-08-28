@@ -74,6 +74,7 @@ npm.cmd run start -- --hostname 127.0.0.1 --port 3000
 ### 3.3 基础检查
 
 ```powershell
+npm.cmd run db:validate
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd run build
@@ -81,7 +82,24 @@ npm.cmd run build
 
 失败时先修复命令自身报告的问题，再继续 Android 或远程发布。不要用“页面看起来能打开”代替构建和类型检查。
 
-### 3.4 服务验收
+### 3.4 改数据库结构
+
+`lib/db/index.ts` 把连接缓存在 `globalThis` 上，建表只发生在打开连接的那一刻。**改完 `lib/db/schema.ts` 必须重启 `next dev`**，否则长期运行的开发服务器会继续用旧连接，新表新列在文件里根本不存在，接口会以 500 空响应失败。可用 `Get-Content .next\dev\logs\next-development.log -Tail 20` 确认是不是 `no such table` / `no such column`。
+
+加**新表**：写进 `DATABASE_SCHEMA` 即可，`CREATE TABLE IF NOT EXISTS` 会处理新旧库。
+
+加**新列**：要改两个地方，缺一不可——
+
+1. `DATABASE_SCHEMA` 里对应表的建表语句（新库靠它）。
+2. `COLUMN_ADDITIONS` 数组（老库靠它 `ALTER TABLE`）。
+
+因为 `CREATE TABLE IF NOT EXISTS` 对已存在的表会整条跳过，新列永远不会出现。`db:validate` 会校验这两处是否一致，漏了哪一处都会报错。SQLite 的 `ADD COLUMN` 只接受可空列或常量默认值；需要改列、删列或加 NOT NULL 约束时，得另建新表迁移数据，现有机制帮不上忙。
+
+**加列拿不到 CHECK 约束。** SQLite 不支持给已有表追加 CHECK，所以同一列在新库（走建表语句）有 CHECK，在老库（走 `ALTER`）没有。例如 `course_lessons.generation_mode` 的 `CHECK (generation_mode IN ('llm','demo','manual'))` 只在新库生效。
+
+由此推出一条硬性要求：**取值受限的列必须在应用层再校验一遍，不能只依赖数据库**。写入前显式判断合法取值，别指望 CHECK 兜底——它在老库里根本不存在。真正需要新旧库约束完全一致时，只能新建表迁移数据。
+
+### 3.5 服务验收
 
 至少确认以下三个请求都能返回：
 
@@ -197,11 +215,15 @@ Invoke-RestMethod http://127.0.0.1:3000/api/wechat/status | ConvertTo-Json
 
 ### 5.5 AI 学习程序
 
-`/api/learning-program` 有三种 POST 动作：
+`/api/learning-program` 的读取入口按查询参数分流：不带参数返回模型可用性；`?program=current` 或 `?program=<programId>` 返回登录用户的课程正文，其中题目只含题干和提示。
 
-- `generate`：用 `subject`、`goal`、可选 `background`、`weeklyHours` 和 `lessonCount` 生成课程；最多 5 节。
-- `tutor`：携带 `course`、`lessonId` 和 `message`，获得当前章节的 AI 讲师回答。
-- `grade`：携带 `course`、`lessonId` 和 `answers`，获得逐题反馈与总分。
+三种 POST 动作都需要登录：
+
+- `generate`：只接收 `goalId` 和可选 `lessonCount`；主题、目标、基础和每周投入从 `goals` 与 `goal_learning_profiles` 读取。生成结果在单个事务内写入 `learning_programs` → `course_modules` → `course_lessons`，返回 `program.programId`。
+- `tutor`：携带 `programId`、`lessonId` 和 `message`，获得当前章节的 AI 讲师回答。
+- `grade`：携带 `programId`、`lessonId` 和 `answers`，获得逐题反馈与总分，并写入 `lesson_assessment_attempts`。
+
+请求体中不再出现课程正文。参考答案和评分 rubric 只保存在 `course_lessons.questions_json`，服务端按 `programId + lessonId` 读取固定快照后评分，客户端无法替换评分标准。同一节重测会让 `attempt_number` 递增，历史尝试不被覆盖。
 
 模型先返回紧凑的主题教学骨架，服务再补足稳定的学习行为框架，避免大教案单请求超时。无模型或模型异常时，`program.mode=rules`、`reply.mode=rules`、`gradedBy=rules` 是可用回退；不得把它报告为模型回归成功。
 
@@ -211,7 +233,7 @@ Invoke-RestMethod http://127.0.0.1:3000/api/wechat/status | ConvertTo-Json
 npm.cmd run learning:smoke -- --require-llm
 ```
 
-该脚本只使用内置的 Agent 课程样例，不读取或输出 Secret；它同时断言课程、讲师和评分均实际走 LLM。详细契约见 [AI 学习程序说明](LEARNING_PROGRAM.md)。
+该脚本会注册一个 `smoke_` 开头的临时账号并创建目标，然后跑通生成、加入今日计划、讲解和两次评分；它不读取或输出 Secret，同时断言课程、讲师和评分均实际走 LLM。详细契约见 [AI 学习程序说明](LEARNING_PROGRAM.md)。
 
 ## 6. 微信接入流程
 

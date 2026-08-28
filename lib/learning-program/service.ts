@@ -1,11 +1,13 @@
+import { randomUUID } from "node:crypto";
+
 import type {
+  AuthoredCourseLesson,
+  AuthoredCourseQuestion,
+  AuthoredLearningProgram,
   CourseGenerationInput,
-  CourseLesson,
-  CourseLessonGrade,
-  CourseQuestion,
+  CourseLessonGradeDraft,
   CourseQuestionFeedback,
   CourseQuestionKind,
-  LearningProgram,
   LessonTutorReply,
 } from "@/lib/learning-program/types";
 
@@ -18,8 +20,21 @@ type LlmConfig = {
 
 type UnknownRecord = Record<string, unknown>;
 
+/** tutor 和 grade 只需要课程的少量抬头信息，不需要整份课程正文。 */
+export type LessonContext = {
+  title: string;
+  instructor: AuthoredLearningProgram["instructor"];
+};
+
 const MAX_LESSONS = 5;
 const DEFAULT_LESSON_COUNT = 5;
+const DEFAULT_REQUIRED_SCORE = 60;
+const RULES_PROVIDER = "本地课程规则";
+
+export function providerLabel(provider: string, model: string) {
+  return model ? `${provider} · ${model}` : provider;
+}
+
 
 function text(value: unknown, fallback = "", max = 1200) {
   if (typeof value !== "string") return fallback;
@@ -42,10 +57,6 @@ function asRecord(value: unknown): UnknownRecord | null {
     : null;
 }
 
-function createId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function isAgentSubject(subject: string) {
   return /(\bagent\b|智能体|代理系统|工具调用|tool\s*calling)/i.test(subject);
 }
@@ -54,34 +65,43 @@ function questionSet(
   lessonId: string,
   concepts: string[],
   objective: string,
-): CourseQuestion[] {
+): AuthoredCourseQuestion[] {
   const [first = "核心概念", second = "方法", third = "边界"] = concepts;
   return [
     {
-      id: `${lessonId}-understand`,
+      id: `${lessonId}-q1`,
+      skillId: "",
       kind: "理解",
       prompt: `用自己的话说明「${first}」在本节中的作用，并说出它和「${second}」的关系。`,
       hint: "先给定义，再说它在流程中解决了什么问题。",
+      referenceAnswer: `${first} 负责界定本节要处理的问题；${second} 是把它落到具体动作上的手段。两者是同一条流程里的前后关系：先由 ${first} 决定做什么，再由 ${second} 决定怎么做。`,
       rubric: `能准确解释 ${first}，并把它和 ${second} 放进同一个因果或工作流程中。`,
+      maxScore: 100,
     },
     {
-      id: `${lessonId}-apply`,
+      id: `${lessonId}-q2`,
+      skillId: "",
       kind: "迁移",
       prompt: `选一个你正在面对的真实场景，说明你会怎样用本节的「${second}」达成「${objective}」。`,
       hint: "写出场景、行动和你会观察的结果。",
+      referenceAnswer: `合格的回答会写清三件事：一个具体场景、用 ${second} 做的一到两个动作、以及用什么结果判断“${objective}”是否达成。`,
       rubric: `答案应包含具体场景、可执行行动，以及至少一个可观察的结果或验证点。`,
+      maxScore: 100,
     },
     {
-      id: `${lessonId}-teach`,
+      id: `${lessonId}-q3`,
+      skillId: "",
       kind: "教回",
       prompt: `假设要向刚入门的同学解释本节，请用一个例子讲清「${third}」为什么不能忽略。`,
       hint: "避免背定义，用一个反例或取舍来讲。",
+      referenceAnswer: `用一个忽略 ${third} 之后出错的例子来讲：先说明本来期望的结果，再说明因为没有考虑 ${third} 实际发生了什么，最后给出应该怎样取舍。`,
       rubric: `能用通俗例子说明 ${third} 的风险、取舍或限制，而不只是重复术语。`,
+      maxScore: 100,
     },
   ];
 }
 
-function genericLessons(subject: string, goal: string, lessonCount: number): CourseLesson[] {
+function genericLessons(subject: string, goal: string, lessonCount: number): AuthoredCourseLesson[] {
   const templates = [
     {
       phase: "定向",
@@ -136,7 +156,7 @@ function genericLessons(subject: string, goal: string, lessonCount: number): Cou
   ];
 
   return templates.slice(0, lessonCount).map((template, index) => {
-    const id = `lesson-${index + 1}`;
+    const id = randomUUID();
     return {
       id,
       order: index + 1,
@@ -150,12 +170,18 @@ function genericLessons(subject: string, goal: string, lessonCount: number): Cou
       example: template.example,
       practice: template.practice,
       deliverable: template.deliverable,
+      requiredScore: DEFAULT_REQUIRED_SCORE,
+      status: "available",
+      primarySkillId: "",
+      difficulty: 3,
+      generationStatus: "ready",
+      generationMode: "demo",
       questions: questionSet(id, template.concepts, template.objective),
     };
   });
 }
 
-function agentLessons(goal: string, lessonCount: number): CourseLesson[] {
+function agentLessons(goal: string, lessonCount: number): AuthoredCourseLesson[] {
   const templates = [
     {
       phase: "定向",
@@ -210,7 +236,7 @@ function agentLessons(goal: string, lessonCount: number): CourseLesson[] {
   ];
 
   return templates.slice(0, lessonCount).map((template, index) => {
-    const id = `lesson-${index + 1}`;
+    const id = randomUUID();
     return {
       id,
       order: index + 1,
@@ -224,26 +250,27 @@ function agentLessons(goal: string, lessonCount: number): CourseLesson[] {
       example: template.example,
       practice: template.practice,
       deliverable: template.deliverable,
+      requiredScore: DEFAULT_REQUIRED_SCORE,
+      status: "available",
+      primarySkillId: "",
+      difficulty: 3,
+      generationStatus: "ready",
+      generationMode: "demo",
       questions: questionSet(id, template.concepts, template.objective),
     };
   });
 }
 
-function fallbackProgram(input: CourseGenerationInput): LearningProgram {
+function fallbackProgram(input: CourseGenerationInput): AuthoredLearningProgram {
   const subject = text(input.subject, "自定主题", 180);
   const goal = text(input.goal, `建立 ${subject} 的可用能力`, 500);
-  const background = text(input.background, "尚未说明基础", 500);
   const weeklyHours = Math.max(1, Math.min(20, Number(input.weeklyHours) || 4));
   const lessonCount = Math.max(3, Math.min(MAX_LESSONS, Number(input.lessonCount) || DEFAULT_LESSON_COUNT));
   const agent = isAgentSubject(`${subject} ${goal}`);
 
   return {
-    courseId: createId("course"),
+    programId: randomUUID(),
     title: agent ? "从目标到自己的 Agent" : `${subject} · 从目标到可交付成果`,
-    subject,
-    goal,
-    background,
-    weeklyHours,
     summary: agent
       ? "用一条可验证的路径理解 Agent 的任务闭环、工具、状态与工程边界，最后完成自己的最小原型。"
       : `围绕“${goal}”，先建立框架，再通过案例、练习和小项目把 ${subject} 变成可迁移的能力。`,
@@ -261,12 +288,13 @@ function fallbackProgram(input: CourseGenerationInput): LearningProgram {
     },
     lessons: agent ? agentLessons(goal, lessonCount) : genericLessons(subject, goal, lessonCount),
     mode: "rules",
-    provider: "本地课程规则",
-    createdAt: new Date().toISOString(),
+    provider: RULES_PROVIDER,
+    model: "",
   };
 }
 
 function readConfig(): LlmConfig | null {
+  if (["demo", "rules", "local"].includes((process.env.LLM_PROVIDER || "").trim().toLowerCase())) return null;
   const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY;
   const baseUrl = process.env.LLM_BASE_URL || process.env.OPENAI_BASE_URL;
   const model = process.env.LLM_MODEL || process.env.OPENAI_MODEL;
@@ -284,7 +312,7 @@ function readConfig(): LlmConfig | null {
 
 async function requestLlm(
   messages: Array<{ role: "system" | "user"; content: string }>,
-): Promise<{ content: string; provider: string } | null> {
+): Promise<{ content: string; provider: string; model: string } | null> {
   const config = readConfig();
   if (!config) return null;
 
@@ -305,7 +333,7 @@ async function requestLlm(
     if (!response.ok) return null;
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content?.trim();
-    return content ? { content, provider: `${config.provider} · ${config.model}` } : null;
+    return content ? { content, provider: config.provider, model: config.model } : null;
   } catch {
     return null;
   }
@@ -327,7 +355,11 @@ function parseObject(content: string): UnknownRecord | null {
   }
 }
 
-function normalizeQuestions(value: unknown, fallback: CourseQuestion[], lessonId: string): CourseQuestion[] {
+function normalizeQuestions(
+  value: unknown,
+  fallback: AuthoredCourseQuestion[],
+  lessonId: string,
+): AuthoredCourseQuestion[] {
   if (!Array.isArray(value) || value.length < 3) return fallback;
   const kinds: CourseQuestionKind[] = ["理解", "迁移", "教回"];
   const normalized = value.slice(0, 4).map((candidate, index) => {
@@ -336,23 +368,26 @@ function normalizeQuestions(value: unknown, fallback: CourseQuestion[], lessonId
     const kind = text(item?.kind, source.kind, 20) as CourseQuestionKind;
     return {
       id: `${lessonId}-q${index + 1}`,
+      skillId: source.skillId,
       kind: kinds.includes(kind) ? kind : source.kind,
       prompt: text(item?.prompt, source.prompt, 600),
       hint: text(item?.hint, source.hint, 300),
+      referenceAnswer: text(item?.referenceAnswer, source.referenceAnswer, 900),
       rubric: text(item?.rubric, source.rubric, 500),
+      maxScore: 100,
     };
   });
   return normalized.length >= 3 ? normalized : fallback;
 }
 
-function normalizeProgram(raw: UnknownRecord, fallback: LearningProgram): LearningProgram {
+function normalizeProgram(raw: UnknownRecord, fallback: AuthoredLearningProgram): AuthoredLearningProgram {
   const rawLessons = Array.isArray(raw.lessons) ? raw.lessons.slice(0, MAX_LESSONS) : [];
   if (rawLessons.length < 3) return fallback;
 
   const lessons = rawLessons.map((candidate, index) => {
     const item = asRecord(candidate);
     const source = fallback.lessons[Math.min(index, fallback.lessons.length - 1)];
-    const lessonId = `lesson-${index + 1}`;
+    const lessonId = randomUUID();
     const concepts = stringList(item?.concepts, source.concepts, 6);
     const objective = text(item?.objective, source.objective, 400);
     return {
@@ -374,14 +409,19 @@ function normalizeProgram(raw: UnknownRecord, fallback: LearningProgram): Learni
       })(),
       practice: text(item?.practice, source.practice, 900),
       deliverable: text(item?.deliverable, source.deliverable, 500),
+      requiredScore: DEFAULT_REQUIRED_SCORE,
+      status: "available" as const,
+      primarySkillId: source.primarySkillId,
+      difficulty: source.difficulty,
+      generationStatus: "ready" as const,
+      generationMode: "llm" as const,
       questions: normalizeQuestions(item?.questions, questionSet(lessonId, concepts, objective), lessonId),
-    } satisfies CourseLesson;
+    } satisfies AuthoredCourseLesson;
   });
 
   const instructor = asRecord(raw.instructor);
   return {
     ...fallback,
-    courseId: createId("course"),
     title: text(raw.title, fallback.title, 180),
     summary: text(raw.summary, fallback.summary, 1000),
     outcomes: stringList(raw.outcomes, fallback.outcomes, 5),
@@ -394,13 +434,15 @@ function normalizeProgram(raw: UnknownRecord, fallback: LearningProgram): Learni
     },
     lessons,
     mode: "llm",
-    provider: fallback.provider,
-    createdAt: new Date().toISOString(),
   };
 }
 
-export async function generateLearningProgram(input: CourseGenerationInput): Promise<LearningProgram> {
+export async function generateLearningProgram(input: CourseGenerationInput): Promise<AuthoredLearningProgram> {
   const fallback = fallbackProgram(input);
+  const subject = text(input.subject, "自定主题", 180);
+  const goal = text(input.goal, `建立 ${subject} 的可用能力`, 500);
+  const background = text(input.background, "尚未说明基础", 500);
+  const weeklyHours = Math.max(1, Math.min(20, Number(input.weeklyHours) || 4));
   const llm = await requestLlm([
     {
       role: "system",
@@ -409,63 +451,55 @@ export async function generateLearningProgram(input: CourseGenerationInput): Pro
     },
     {
       role: "user",
-      content: `为以下学习目标编排一套中文课程的“教学骨架”。课程系统会根据你的骨架补全每节讲解、练习、交付物与课后理解题，因此你需要用主题专属的概念和案例把骨架编准，而不是输出泛泛标题。\n\n学习主题：${fallback.subject}\n目标：${fallback.goal}\n学习者基础：${fallback.background}\n每周可投入：${fallback.weeklyHours} 小时\n课程节数：${fallback.lessons.length}\n\n只返回 JSON 对象，字段为：title、summary、outcomes（3-5 项）、cadence、instructor（name、role、style、openingMessage）、lessons。每节 lessons 只包含 phase、title、durationMinutes、objective、concepts（3-6 项）、focus、example。其中 focus 是一句主题专属的关键讲解（不超过 55 个汉字），example 是一个主题专属的微型案例（不超过 45 个汉字）。不要输出 questions、开场白、练习、交付物或 Markdown。整体 JSON 尽量控制在 900 个汉字以内。\n\n若主题是 Agent/智能体，必须依次覆盖任务闭环、上下文/工具/状态、工具契约、失败边界与最小原型验证。`,
+      content: `为以下学习目标编排一套中文课程的“教学骨架”。课程系统会根据你的骨架补全每节讲解、练习、交付物与课后理解题，因此你需要用主题专属的概念和案例把骨架编准，而不是输出泛泛标题。\n\n学习主题：${subject}\n目标：${goal}\n学习者基础：${background}\n每周可投入：${weeklyHours} 小时\n课程节数：${fallback.lessons.length}\n\n只返回 JSON 对象，字段为：title、summary、outcomes（3-5 项）、cadence、instructor（name、role、style、openingMessage）、lessons。每节 lessons 只包含 phase、title、durationMinutes、objective、concepts（3-6 项）、focus、example。其中 focus 是一句主题专属的关键讲解（不超过 55 个汉字），example 是一个主题专属的微型案例（不超过 45 个汉字）。不要输出 questions、开场白、练习、交付物或 Markdown。整体 JSON 尽量控制在 900 个汉字以内。\n\n若主题是 Agent/智能体，必须依次覆盖任务闭环、上下文/工具/状态、工具契约、失败边界与最小原型验证。`,
     },
   ]);
   if (!llm) return fallback;
   const raw = parseObject(llm.content);
   if (!raw) return fallback;
-  const program = normalizeProgram(raw, fallback);
-  return { ...program, provider: llm.provider };
+  return { ...normalizeProgram(raw, fallback), provider: llm.provider, model: llm.model };
 }
 
-function findLesson(program: LearningProgram, lessonId: string) {
-  const lesson = program.lessons.find((item) => item.id === lessonId);
-  if (!lesson) throw new Error("找不到要学习的课程章节。");
-  return lesson;
-}
-
-function fallbackTutor(program: LearningProgram, lesson: CourseLesson, message: string): LessonTutorReply {
+function fallbackTutor(lesson: AuthoredCourseLesson, message: string): LessonTutorReply {
   const firstConcept = lesson.concepts[0] || "本节概念";
   return {
     lessonId: lesson.id,
     reply: `你正在第 ${lesson.order} 节「${lesson.title}」。这节的关键不是记住术语，而是能用它解释一个真实选择。${lesson.explanation} 你刚才提到“${text(message, "还没有写下问题", 160)}”，可以先把它放回本节的目标：${lesson.objective}。`,
     followUp: `请先用一句话说明：在你的场景里，「${firstConcept}」解决的具体问题是什么？`,
     mode: "rules",
-    provider: "本地课程规则",
+    provider: RULES_PROVIDER,
   };
 }
 
 export async function askCourseInstructor(
-  program: LearningProgram,
-  lessonId: string,
+  context: LessonContext,
+  lesson: AuthoredCourseLesson,
   message: string,
 ): Promise<LessonTutorReply> {
-  const lesson = findLesson(program, lessonId);
   const cleanMessage = text(message, "请带我理解这一节的关键点。", 1200);
-  const fallback = fallbackTutor(program, lesson, cleanMessage);
+  const fallback = fallbackTutor(lesson, cleanMessage);
   const llm = await requestLlm([
     {
       role: "system",
-      content: `你是${program.instructor.name}，${program.instructor.role}。你的教学风格：${program.instructor.style}。请基于本节内容回答，不捏造课程之外的事实。先肯定或定位学习者的思路，再用一个短例子解释；不要一次给出整份标准答案；最后留一个可以马上回答的追问。回复限制在 260 个汉字以内，使用两段自然中文。`,
+      content: `你是${context.instructor.name}，${context.instructor.role}。你的教学风格：${context.instructor.style}。请基于本节内容回答，不捏造课程之外的事实。先肯定或定位学习者的思路，再用一个短例子解释；不要一次给出整份标准答案；最后留一个可以马上回答的追问。回复限制在 260 个汉字以内，使用两段自然中文。`,
     },
     {
       role: "user",
-      content: `课程：${program.title}\n当前章节：${lesson.title}\n目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n讲解：${lesson.explanation}\n示例：${lesson.example}\n\n学习者的问题或想法：${cleanMessage}`,
+      content: `课程：${context.title}\n当前章节：${lesson.title}\n目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n讲解：${lesson.explanation}\n示例：${lesson.example}\n\n学习者的问题或想法：${cleanMessage}`,
     },
   ]);
   if (!llm) return fallback;
   const reply = text(llm.content, fallback.reply, 1500);
   return {
-    lessonId,
+    lessonId: lesson.id,
     reply,
     followUp: `回到本节目标：${lesson.objective}。你现在会怎样把它用在自己的场景？`,
     mode: "llm",
-    provider: llm.provider,
+    provider: providerLabel(llm.provider, llm.model),
   };
 }
 
-function fallbackFeedback(lesson: CourseLesson, answers: Record<string, string>): CourseLessonGrade {
+function fallbackFeedback(lesson: AuthoredCourseLesson, answers: Record<string, string>): CourseLessonGradeDraft {
   const feedback: CourseQuestionFeedback[] = lesson.questions.map((question) => {
     const answer = text(answers[question.id], "", 3000);
     const normalized = answer.toLowerCase();
@@ -477,10 +511,11 @@ function fallbackFeedback(lesson: CourseLesson, answers: Record<string, string>)
     return {
       questionId: question.id,
       score,
+      maxScore: question.maxScore,
       feedback: answer
         ? `已看到你的回答。${conceptHits ? "你把关键概念放进了答案中，" : "下一次请点出本节的一个关键概念，"}${score >= 70 ? "再补一个具体场景，会更有说服力。" : "请补上“为什么这样做”和会观察什么结果。"}`
         : "还没有作答；先用本题提示写下一个具体场景，再补上你的判断依据。",
-      reference: question.rubric,
+      reference: question.referenceAnswer,
     };
   });
   const score = Math.round(feedback.reduce((sum, item) => sum + item.score, 0) / Math.max(1, feedback.length));
@@ -491,11 +526,16 @@ function fallbackFeedback(lesson: CourseLesson, answers: Record<string, string>)
     nextStep: score >= 75 ? `完成本节交付物：${lesson.deliverable}` : "挑一题重答：先给结论，再写一个例子和一个验证点。",
     feedback,
     gradedBy: "rules",
-    provider: "本地课程规则",
+    provider: RULES_PROVIDER,
+    model: "",
   };
 }
 
-function normalizeGrade(raw: UnknownRecord, fallback: CourseLessonGrade, lesson: CourseLesson): CourseLessonGrade {
+function normalizeGrade(
+  raw: UnknownRecord,
+  fallback: CourseLessonGradeDraft,
+  lesson: AuthoredCourseLesson,
+): CourseLessonGradeDraft {
   const rawFeedback = Array.isArray(raw.feedback) ? raw.feedback : [];
   const feedback = lesson.questions.map((question, index) => {
     const candidate = asRecord(rawFeedback[index]);
@@ -503,6 +543,7 @@ function normalizeGrade(raw: UnknownRecord, fallback: CourseLessonGrade, lesson:
     return {
       questionId: question.id,
       score: Math.max(0, Math.min(100, Number(candidate?.score) || source.score)),
+      maxScore: question.maxScore,
       feedback: text(candidate?.feedback, source.feedback, 700),
       reference: text(candidate?.reference, source.reference, 700),
     };
@@ -518,40 +559,40 @@ function normalizeGrade(raw: UnknownRecord, fallback: CourseLessonGrade, lesson:
 }
 
 export async function gradeCourseLesson(
-  program: LearningProgram,
-  lessonId: string,
+  context: LessonContext,
+  lesson: AuthoredCourseLesson,
   answers: Record<string, string>,
-): Promise<CourseLessonGrade> {
-  const lesson = findLesson(program, lessonId);
+): Promise<CourseLessonGradeDraft> {
   const fallback = fallbackFeedback(lesson, answers);
   const answerSheet = lesson.questions.map((question) => ({
     id: question.id,
     kind: question.kind,
     prompt: question.prompt,
+    referenceAnswer: question.referenceAnswer,
     rubric: question.rubric,
     answer: text(answers[question.id], "未作答", 3000),
   }));
   const llm = await requestLlm([
     {
       role: "system",
-      content: "你是一名重视理解和迁移的课程教师。根据给定章节和评分标准，公平评分开放题；不因文笔华丽加分，也不要捏造学习者没有写出的内容。输出严格 JSON：score（0-100）、summary、nextStep、feedback（每题包含 score、feedback、reference）。feedback 数量必须和题目相同，中文简洁、可行动。",
+      content: "你是一名重视理解和迁移的课程教师。根据给定章节、参考答案和评分标准，公平评分开放题；不因文笔华丽加分，也不要捏造学习者没有写出的内容。输出严格 JSON：score（0-100）、summary、nextStep、feedback（每题包含 score、feedback、reference）。feedback 数量必须和题目相同，中文简洁、可行动。",
     },
     {
       role: "user",
-      content: `课程：${program.title}\n章节：${lesson.title}\n学习目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n章节讲解：${lesson.explanation}\n\n作答与标准：${JSON.stringify(answerSheet)}`,
+      content: `课程：${context.title}\n章节：${lesson.title}\n学习目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n章节讲解：${lesson.explanation}\n\n作答与标准：${JSON.stringify(answerSheet)}`,
     },
   ]);
   if (!llm) return fallback;
   const raw = parseObject(llm.content);
   if (!raw) return fallback;
-  return { ...normalizeGrade(raw, fallback, lesson), provider: llm.provider };
+  return { ...normalizeGrade(raw, fallback, lesson), provider: llm.provider, model: llm.model };
 }
 
 export function getLearningProgramStatus() {
   const config = readConfig();
   return {
     configured: Boolean(config),
-    provider: config ? `${config.provider} · ${config.model}` : "未配置",
+    provider: config ? providerLabel(config.provider, config.model) : "未配置",
     fallbackAvailable: true,
   };
 }

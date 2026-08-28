@@ -8,7 +8,11 @@ type GoalRow = {
   description: string;
   progress_percent: number;
   horizon: string;
+  target_date: string | null;
   status: "active" | "review" | "completed" | "archived";
+  self_level: Goal["selfLevel"] | null;
+  diagnostic_status: Goal["diagnosticStatus"] | null;
+  program_id: string | null;
 };
 
 type TaskRow = {
@@ -21,6 +25,8 @@ type TaskRow = {
   coin_reward: number;
   status: Task["status"];
   kind: TaskKind;
+  lesson_id: string | null;
+  program_id: string | null;
 };
 
 type ActivityRow = {
@@ -80,10 +86,29 @@ function buildWeeklyBars(rows: ActivityRow[]) {
 export function getDashboardData(user: CurrentUser): DemoSeed {
   const database = getDatabase();
   const goalRows = database
-    .prepare("SELECT id, title, description, progress_percent, horizon, status FROM goals WHERE user_id = ? AND status != 'archived' ORDER BY created_at")
+    .prepare(`
+      SELECT goals.id, goals.title, goals.description, goals.progress_percent, goals.horizon,
+             goals.target_date, goals.status, profile.self_level, profile.diagnostic_status,
+             (SELECT program.id FROM learning_programs AS program
+              WHERE program.goal_id = goals.id AND program.status = 'active'
+              ORDER BY program.version DESC LIMIT 1) AS program_id
+      FROM goals
+      LEFT JOIN goal_learning_profiles AS profile ON profile.goal_id = goals.id
+      WHERE goals.user_id = ? AND goals.status != 'archived'
+      ORDER BY goals.created_at
+    `)
     .all(user.id) as GoalRow[];
   const taskRows = database
-    .prepare("SELECT id, title, subtitle, time_label, duration_minutes, xp_reward, coin_reward, status, kind FROM tasks WHERE user_id = ? AND status != 'skipped' ORDER BY position, created_at")
+    .prepare(`
+      SELECT tasks.id, tasks.title, tasks.subtitle, tasks.time_label, tasks.duration_minutes,
+             tasks.xp_reward, tasks.coin_reward, tasks.status, tasks.kind,
+             link.lesson_id AS lesson_id, lesson.program_id AS program_id
+      FROM tasks
+      LEFT JOIN task_lesson_links AS link ON link.task_id = tasks.id
+      LEFT JOIN course_lessons AS lesson ON lesson.id = link.lesson_id
+      WHERE tasks.user_id = ? AND tasks.status != 'skipped'
+      ORDER BY tasks.position, tasks.created_at
+    `)
     .all(user.id) as TaskRow[];
   const activityRows = database
     .prepare("SELECT id, raw_content, topic, output, minutes, xp_reward, coin_reward, occurred_at FROM activity_logs WHERE user_id = ? ORDER BY occurred_at DESC LIMIT 100")
@@ -98,6 +123,10 @@ export function getDashboardData(user: CurrentUser): DemoSeed {
     description: goal.description,
     progress: goal.progress_percent,
     horizon: goal.horizon,
+    ...(goal.target_date ? { targetDate: goal.target_date } : {}),
+    ...(goal.self_level ? { selfLevel: goal.self_level } : {}),
+    ...(goal.diagnostic_status ? { diagnosticStatus: goal.diagnostic_status } : {}),
+    ...(goal.program_id ? { learningProgramId: goal.program_id } : {}),
     status: statusLabel(goal.status),
   }));
   const tasks: Task[] = taskRows.map((task) => ({
@@ -110,6 +139,8 @@ export function getDashboardData(user: CurrentUser): DemoSeed {
     coin: task.coin_reward,
     status: task.status,
     kind: task.kind,
+    ...(task.lesson_id ? { lessonId: task.lesson_id } : {}),
+    ...(task.program_id ? { programId: task.program_id } : {}),
   }));
   const learningLogs: LearningLog[] = activityRows.map((log) => ({
     id: log.id,
