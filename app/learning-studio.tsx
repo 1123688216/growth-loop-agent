@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -24,46 +24,64 @@ import type {
   LearningProgram,
   LessonTutorReply,
 } from "@/lib/learning-program/types";
+import type { Goal } from "@/lib/demo-data";
 
-const COURSE_STORAGE_KEY = "growth-loop.learning-program.v1";
-const COMPLETED_STORAGE_KEY = "growth-loop.learning-program.completed.v1";
+/** 本地只缓存当前课程的 id，课程正文始终从服务端拉取。 */
+export const PROGRAM_STORAGE_KEY = "growth-loop.learning-program.program-id.v1";
 
 type LearningStudioProps = {
   compact?: boolean;
   onBack?: () => void;
   onAddLesson?: (lesson: CourseLesson) => void;
+  programId?: string;
+  targetLessonId?: string;
+  onLessonPassed?: (lesson: CourseLesson, grade: CourseLessonGrade) => void;
+  goals?: Goal[];
+  onSelectGoal?: (goal: Goal) => Promise<void>;
 };
 
-function readStoredCourse() {
-  if (typeof window === "undefined") return null;
+function readCachedProgramId() {
+  if (typeof window === "undefined") return "";
   try {
-    const value = JSON.parse(window.localStorage.getItem(COURSE_STORAGE_KEY) || "null") as unknown;
-    if (!value || typeof value !== "object" || !Array.isArray((value as LearningProgram).lessons)) return null;
-    return value as LearningProgram;
+    return window.localStorage.getItem(PROGRAM_STORAGE_KEY) || "";
   } catch {
-    return null;
+    return "";
   }
 }
 
-function readCompleted(courseId?: string) {
-  if (typeof window === "undefined" || !courseId) return [] as string[];
+function cacheProgramId(programId: string) {
   try {
-    const value = JSON.parse(window.localStorage.getItem(COMPLETED_STORAGE_KEY) || "[]") as unknown;
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    window.localStorage.setItem(PROGRAM_STORAGE_KEY, programId);
   } catch {
-    return [] as string[];
+    // 无痕模式下写不进缓存也不影响课程读取。
   }
+}
+
+async function fetchProgram(reference: string) {
+  const response = await fetch(`/api/learning-program?program=${encodeURIComponent(reference)}`);
+  if (!response.ok) throw new Error("program unavailable");
+  const data = (await response.json()) as { program: LearningProgram | null };
+  return data.program;
 }
 
 function courseStatusLabel(mode: LearningProgram["mode"]) {
   return mode === "llm" ? "AI 编排" : "本地课程";
 }
 
-export default function LearningStudio({ compact = false, onBack, onAddLesson }: LearningStudioProps) {
-  const [subject, setSubject] = useState("Agent 系统设计与自己的 Agent 原型");
-  const [goal, setGoal] = useState("理解 Agent 的任务闭环、工具调用和状态管理，并做出一个能处理学习记录的最小 Agent。");
-  const [background, setBackground] = useState("会基础 TypeScript 和 Next.js，希望先建立正确架构，再开始开发。");
-  const [weeklyHours, setWeeklyHours] = useState(4);
+function passedLessonIds(program: LearningProgram) {
+  return program.lessons.filter((lesson) => lesson.status === "passed").map((lesson) => lesson.id);
+}
+
+export default function LearningStudio({
+  compact = false,
+  onBack,
+  onAddLesson,
+  programId,
+  targetLessonId,
+  onLessonPassed,
+  goals = [],
+  onSelectGoal,
+}: LearningStudioProps) {
   const [program, setProgram] = useState<LearningProgram | null>(null);
   const [activeLessonId, setActiveLessonId] = useState("");
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([]);
@@ -71,81 +89,60 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
   const [grades, setGrades] = useState<Record<string, CourseLessonGrade>>({});
   const [tutorInput, setTutorInput] = useState("");
   const [tutorReply, setTutorReply] = useState<LessonTutorReply | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isTutorBusy, setIsTutorBusy] = useState(false);
   const [isGrading, setIsGrading] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    const stored = readStoredCourse();
-    if (!stored) return;
-    const timer = window.setTimeout(() => {
-      setProgram(stored);
-      setActiveLessonId(stored.lessons[0]?.id || "");
-      setCompletedLessonIds(readCompleted(stored.courseId));
-      setTutorReply({
-        lessonId: stored.lessons[0]?.id || "",
-        reply: stored.instructor.openingMessage,
-        followUp: "告诉我你准备从哪一个真实问题开始。",
-        mode: stored.mode,
-        provider: stored.provider,
-      });
-    }, 0);
-    return () => window.clearTimeout(timer);
+  const applyProgram = useCallback((next: LearningProgram) => {
+    cacheProgramId(next.programId);
+    setProgram(next);
+    setCompletedLessonIds(passedLessonIds(next));
+    setActiveLessonId((current) => next.lessons.some((lesson) => lesson.id === current) ? current : next.lessons[0]?.id || "");
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      const cached = programId || readCachedProgramId();
+      let next = await fetchProgram(cached || "current");
+      // 缓存里的 programId 可能已经失效（换账号、课程重新生成），退回读取最近一份课程。
+      if (!next && cached) next = await fetchProgram("current");
+      return next;
+    }
+
+    // programId 变化时保留当前课程正文，等新课程到达再替换，避免中途闪一次空白。
+    void load()
+      .then((next) => {
+        if (cancelled) return;
+        if (!next) {
+          setProgram(null);
+          return;
+        }
+        applyProgram(next);
+      })
+      .catch(() => {
+        if (!cancelled) setError("课程暂时读取不到，请稍后刷新页面。");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [applyProgram, programId]);
 
   const activeLesson = useMemo(
     () => program?.lessons.find((lesson) => lesson.id === activeLessonId) || program?.lessons[0] || null,
     [activeLessonId, program],
   );
 
-  function persist(next: LearningProgram, completed = completedLessonIds) {
-    window.localStorage.setItem(COURSE_STORAGE_KEY, JSON.stringify(next));
-    window.localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(completed));
-  }
-
-  async function generateProgram() {
-    if (!subject.trim() || !goal.trim()) {
-      setError("先告诉我学习什么，以及希望最终做到什么。");
-      return;
-    }
-    setIsGenerating(true);
-    setError("");
-    try {
-      const response = await fetch("/api/learning-program", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "generate",
-          subject: subject.trim(),
-          goal: goal.trim(),
-          background: background.trim(),
-          weeklyHours,
-          lessonCount: 5,
-        }),
-      });
-      const data = (await response.json()) as { program?: LearningProgram; error?: string };
-      if (!response.ok || !data.program) throw new Error(data.error || "课程暂时没有生成成功。");
-      setProgram(data.program);
-      setActiveLessonId(data.program.lessons[0]?.id || "");
-      setCompletedLessonIds([]);
-      setAnswers({});
-      setGrades({});
-      const opening: LessonTutorReply = {
-        lessonId: data.program.lessons[0]?.id || "",
-        reply: data.program.instructor.openingMessage,
-        followUp: "先用一句话说说，你希望这门课结束时能亲手完成什么？",
-        mode: data.program.mode,
-        provider: data.program.provider,
-      };
-      setTutorReply(opening);
-      persist(data.program, []);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "课程暂时不可用，请稍后重试。");
-    } finally {
-      setIsGenerating(false);
-    }
-  }
+  useEffect(() => {
+    if (!program || !targetLessonId) return;
+    if (!program.lessons.some((lesson) => lesson.id === targetLessonId)) return;
+    const timer = window.setTimeout(() => setActiveLessonId(targetLessonId), 0);
+    return () => window.clearTimeout(timer);
+  }, [program, targetLessonId]);
 
   async function askTutor() {
     if (!program || !activeLesson || !tutorInput.trim()) return;
@@ -157,7 +154,7 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "tutor",
-          course: program,
+          programId: program.programId,
           lessonId: activeLesson.id,
           message: tutorInput.trim(),
         }),
@@ -188,14 +185,21 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "grade",
-          course: program,
+          programId: program.programId,
           lessonId: activeLesson.id,
           answers,
         }),
       });
-      const data = (await response.json()) as { grade?: CourseLessonGrade; error?: string };
+      const data = (await response.json()) as { grade?: CourseLessonGrade; program?: LearningProgram | null; error?: string };
       if (!response.ok || !data.grade) throw new Error(data.error || "暂时无法评分。");
-      setGrades((current) => ({ ...current, [activeLesson.id]: data.grade! }));
+      const grade = data.grade;
+      setGrades((current) => ({ ...current, [activeLesson.id]: grade }));
+      if (data.program) applyProgram(data.program);
+      if (!grade.passed) return;
+      if (!completedLessonIds.includes(activeLesson.id)) {
+        setCompletedLessonIds((current) => [...current, activeLesson.id]);
+        onLessonPassed?.(activeLesson, grade);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "暂时无法评分。");
     } finally {
@@ -209,52 +213,23 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
     setError("");
   }
 
-  function toggleCompleted(lesson: CourseLesson) {
-    if (!program) return;
-    const next = completedLessonIds.includes(lesson.id)
-      ? completedLessonIds.filter((id) => id !== lesson.id)
-      : [...completedLessonIds, lesson.id];
-    setCompletedLessonIds(next);
-    persist(program, next);
-  }
-
-  function loadAgentStarter() {
-    setSubject("Agent 系统设计与自己的 Agent 原型");
-    setGoal("理解 Agent 的任务闭环、工具调用和状态管理，并做出一个能处理学习记录的最小 Agent。");
-    setBackground("会基础 TypeScript 和 Next.js，希望先建立正确架构，再开始开发。");
-    setWeeklyHours(4);
-  }
-
   return (
     <section className={`learning-studio ${compact ? "is-compact" : ""}`} aria-label="AI 学习课程">
-      <header className="learning-studio-heading">
-        <div>
-          <div className="eyebrow"><span className="eyebrow-line" /> AI 学习程序</div>
-          <h2>从目标，走到能交付的成果。</h2>
-          <p>告诉 AI 想学什么；它会编排课程、陪你理解，并在每节课后检查你是否真的会用。</p>
-        </div>
-        {onBack && <button className="learning-back-button" onClick={onBack}><ArrowLeft size={16} /> 返回</button>}
-      </header>
-
-      <section className="learning-brief-card">
-        <div className="learning-brief-copy">
-          <span className="learning-brief-mark"><Sparkles size={17} /></span>
-          <div><strong>从一件想学会的事开始</strong><p>课程不是资料清单。每一节都会留下一个能验证的输出。</p></div>
-        </div>
-        <button className="learning-starter-button" onClick={loadAgentStarter}><BookOpen size={15} /> 载入 Agent 实战示例</button>
-        <div className="learning-form-grid">
-          <label className="learning-field"><span>我想学习</span><input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={180} placeholder="例如：摄影、微积分、机器学习、法语口语" /></label>
-          <label className="learning-field learning-field-hours"><span>每周投入</span><select value={weeklyHours} onChange={(event) => setWeeklyHours(Number(event.target.value))}><option value={2}>2 小时</option><option value={4}>4 小时</option><option value={6}>6 小时</option><option value={8}>8 小时</option></select></label>
-          <label className="learning-field learning-field-wide"><span>课程结束时，我希望能做到</span><textarea value={goal} onChange={(event) => setGoal(event.target.value)} maxLength={500} placeholder="写下一个具体、可展示的结果" rows={2} /></label>
-          <label className="learning-field learning-field-wide"><span>我现在的基础（可选）</span><input value={background} onChange={(event) => setBackground(event.target.value)} maxLength={500} placeholder="例如：看过一些教程，会基础编程" /></label>
-        </div>
-        <div className="learning-form-actions">
-          <p>适用于技术、人文、语言、创作与职业技能等主题。</p>
-          <button className="learning-generate-button" onClick={generateProgram} disabled={isGenerating}>{isGenerating ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} {program ? "重新编排课程" : "生成我的课程"}<ArrowUpRight size={16} /></button>
-        </div>
-      </section>
+      {compact && onBack && <div className="learning-compact-toolbar"><button className="learning-back-button" onClick={onBack}><ArrowLeft size={16} /> 返回计划</button></div>}
 
       {error && <p className="learning-error" role="alert">{error}</p>}
+
+      {goals.length > 0 && <section className="learning-goal-switch" aria-label="切换学习目标">
+        <div><span className="eyebrow">LEARNING GOALS</span><strong>切换学习目标</strong><small>课程、诊断和进度分别归属于各自目标。</small></div>
+        <div className="learning-goal-switch-list">{goals.map((goal) => {
+          const active = program?.goalId === goal.id;
+          const needsDiagnostic = goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress";
+          return <button key={goal.id} type="button" className={active ? "active" : ""} onClick={() => void onSelectGoal?.(goal)} aria-pressed={active}>
+            <strong>{goal.title}</strong>
+            <span>{active ? "当前课程" : needsDiagnostic ? "继续初始诊断" : goal.learningProgramId ? "切换课程" : "准备学习路径"}</span>
+          </button>;
+        })}</div>
+      </section>}
 
       {program && activeLesson && (
         <section className="learning-course-shell">
@@ -275,9 +250,9 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
                 {program.lessons.map((lesson) => {
                   const isActive = lesson.id === activeLesson.id;
                   const isDone = completedLessonIds.includes(lesson.id);
-                  return <button key={lesson.id} className={`learning-lesson-link ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}`} onClick={() => chooseLesson(lesson)}>
+                  return <button key={lesson.id} className={`learning-lesson-link ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""} ${lesson.generationStatus !== "ready" ? "is-planned" : ""}`} onClick={() => chooseLesson(lesson)}>
                     <span className="learning-lesson-index">{isDone ? <Check size={13} /> : String(lesson.order).padStart(2, "0")}</span>
-                    <span><small>{lesson.phase}</small><strong>{lesson.title}</strong><em>{lesson.durationMinutes} 分钟</em></span>
+                    <span><small>{lesson.phase}</small><strong>{lesson.title}</strong><em>{lesson.generationStatus === "ready" ? `${lesson.durationMinutes} 分钟` : "待前一节通过后生成"}</em></span>
                     <ChevronRight size={15} />
                   </button>;
                 })}
@@ -287,10 +262,21 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
             <article className="learning-lesson-card">
               <div className="learning-lesson-title-row">
                 <div><span>第 {activeLesson.order} 节 · {activeLesson.phase}</span><h3>{activeLesson.title}</h3><p>{activeLesson.objective}</p></div>
-                <button className={`learning-complete-button ${completedLessonIds.includes(activeLesson.id) ? "is-complete" : ""}`} onClick={() => toggleCompleted(activeLesson)}>{completedLessonIds.includes(activeLesson.id) ? <><Check size={15} /> 已学完</> : <><CircleCheck size={15} /> 标记学完</>}</button>
+                <div className={`learning-complete-button ${completedLessonIds.includes(activeLesson.id) ? "is-complete" : ""}`} role="status">
+                  {completedLessonIds.includes(activeLesson.id)
+                    ? <><Check size={15} /> 已完成 · {grades[activeLesson.id]?.level || "合格"}</>
+                    : grades[activeLesson.id]
+                      ? <><CircleCheck size={15} /> 尚未合格 · {grades[activeLesson.id].score} 分</>
+                      : <><CircleCheck size={15} /> 答题合格后完成</>}
+                </div>
               </div>
               <div className="learning-concepts">{activeLesson.concepts.map((concept) => <span key={concept}>{concept}</span>)}</div>
 
+              {activeLesson.generationStatus !== "ready" ? <section className="learning-planned-placeholder">
+                <span className="eyebrow">ADAPTIVE LESSON</span>
+                <h4>本节先保留路线，不提前生成正文</h4>
+                <p>通过前一节的导师考核后，系统会根据最新掌握度生成本节讲解、练习和巩固题，避免整套课程一开始就固定。</p>
+              </section> : <>
               <div className="learning-lesson-content">
                 <section><span className="learning-content-label"><Target size={14} /> 这一节先抓住</span><p>{activeLesson.opening}</p></section>
                 <section><span className="learning-content-label"><BookOpen size={14} /> 导师讲解</span><p>{activeLesson.explanation}</p></section>
@@ -311,16 +297,19 @@ export default function LearningStudio({ compact = false, onBack, onAddLesson }:
                 </div>
                 {grades[activeLesson.id] && <GradeCard grade={grades[activeLesson.id]} questions={activeLesson.questions} />}
               </section>
+              </>}
             </article>
           </div>
         </section>
       )}
 
-      {!program && <section className="learning-empty-course"><span><Sparkles size={18} /></span><div><strong>你的第一门课会从一个真实目标开始。</strong><p>推荐先加载上方的 Agent 实战示例，或直接写下任何你想系统学会的主题。</p></div></section>}
+      {isLoading && !program && <section className="learning-empty-course"><span><LoaderCircle className="spin" size={18} /></span><div><strong>正在读取课程……</strong><p>课程正文保存在服务端，换设备或清缓存后也能继续。</p></div></section>}
+
+      {!isLoading && !program && <section className="learning-empty-course"><span><Sparkles size={18} /></span><div><strong>还没有与目标关联的课程。</strong><p>请先到计划页创建目标。AI 会根据目标、完成标准、当前基础和每周投入直接生成课程。</p>{onBack && <button className="learning-back-button" onClick={onBack}><ArrowLeft size={16} /> 前往计划创建目标</button>}</div></section>}
     </section>
   );
 }
 
 function GradeCard({ grade, questions }: { grade: CourseLessonGrade; questions: CourseLesson["questions"] }) {
-  return <section className="learning-grade-card"><div className="learning-grade-score"><span>本节理解度</span><strong>{grade.score}</strong><em>/ 100</em></div><div className="learning-grade-summary"><strong>{grade.summary}</strong><p>下一步：{grade.nextStep}</p></div><div className="learning-grade-feedback">{grade.feedback.map((item, index) => <div key={item.questionId}><span>{questions[index]?.kind || "问题"} · {item.score} 分</span><p>{item.feedback}</p><small>评分关注：{item.reference}</small></div>)}</div><button className="learning-grade-reset" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><RotateCcw size={14} /> 回到本节开头</button></section>;
+  return <section className="learning-grade-card"><div className="learning-grade-score"><span>本节理解度</span><strong>{grade.score}</strong><em>/ 100</em></div><div className="learning-grade-summary"><strong>{grade.summary}</strong><p>下一步：{grade.nextStep}</p><small>第 {grade.attemptNumber} 次评测 · {grade.level}</small></div><div className="learning-grade-feedback">{grade.feedback.map((item, index) => <div key={item.questionId}><span>{questions[index]?.kind || "问题"} · {item.score} 分</span><p>{item.feedback}</p><small>参考答案：{item.reference}</small></div>)}</div><button className="learning-grade-reset" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><RotateCcw size={14} /> 回到本节开头</button></section>;
 }

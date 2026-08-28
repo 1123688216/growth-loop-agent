@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Capacitor } from "@capacitor/core";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
@@ -18,28 +17,25 @@ import {
   Flame,
   Home as HomeIcon,
   LayoutDashboard,
-  ListChecks,
   MessageCircle,
   MoreHorizontal,
   Pause,
-  Play,
   Plus,
-  ReceiptText,
   RotateCcw,
   Sparkles,
   Target,
   Timer,
+  Trash2,
   Trophy,
-  WalletCards,
   X,
 } from "lucide-react";
 import { demoSeed, type DemoSeed, type Goal, type Task, type TaskKind } from "@/lib/demo-data";
+import { availableHours, minTargetDate, weeksUntil } from "@/lib/goal-schedule";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
-import type { CourseLesson } from "@/lib/learning-program/types";
-import LearningStudio from "./learning-studio";
-import MobileAppShell, { type MobileTab } from "./mobile-shell";
+import type { CourseLesson, CourseLessonGrade, DiagnosticAssessment, DiagnosticGrade, DiagnosticQuestionResult, GoalPreparation, LearningProgram } from "@/lib/learning-program/types";
+import LearningStudio, { PROGRAM_STORAGE_KEY } from "./learning-studio";
 
-type Tab = MobileTab;
+type Tab = "今日" | "计划" | "课程" | "记录" | "成长";
 
 type LogEntry = {
   id: string;
@@ -68,6 +64,133 @@ type QuizSession = {
 };
 
 type PomodoroMode = "focus" | "break";
+type TodayMode = "day" | "evening";
+type CourseTarget = { taskId: string; lessonId?: string };
+type CreateGoalInput = {
+  title: string;
+  description: string;
+  targetDate: string;
+  background: string;
+  weeklyHours: number;
+  selfLevel: "" | "beginner" | "familiar" | "intermediate";
+};
+
+type GoalCreationProgress = {
+  stage: string;
+  percent: number;
+  message: string;
+  status: "running" | "done" | "error";
+};
+
+type GoalCreationReporter = (progress: GoalCreationProgress) => void;
+
+async function readGoalPreparationStream(response: Response, onProgress?: GoalCreationReporter): Promise<GoalPreparation> {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(payload.error || "学习路径准备失败，请稍后重试。");
+  }
+  if (!response.body) throw new Error("浏览器没有收到学习路径进度流。");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let preparation: GoalPreparation | null = null;
+
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      throw new Error("学习路径进度流格式不正确。");
+    }
+
+    if (event.type === "progress" && event.progress && typeof event.progress === "object") {
+      const progress = event.progress as Record<string, unknown>;
+      if (typeof progress.stage === "string" && typeof progress.percent === "number" && typeof progress.message === "string") {
+        onProgress?.({
+          stage: progress.stage,
+          percent: Math.max(0, Math.min(100, progress.percent)),
+          message: progress.message,
+          status: "running",
+        });
+      }
+      return;
+    }
+    if (event.type === "error") throw new Error(typeof event.error === "string" ? event.error : "学习路径准备失败，请稍后重试。");
+    if (event.type === "result" && event.preparation && typeof event.preparation === "object") {
+      preparation = event.preparation as GoalPreparation;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(consumeLine);
+      if (done) break;
+    }
+    consumeLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!preparation) throw new Error("学习路径准备完成，但服务端没有返回结果。");
+  return preparation;
+}
+
+type AdaptiveDiagnosticAnswerResult = {
+  complete: boolean;
+  assessment?: DiagnosticAssessment;
+  questionResult?: DiagnosticQuestionResult;
+  grade?: DiagnosticGrade;
+  program?: LearningProgram;
+  replayed?: boolean;
+};
+
+async function readDiagnosticAnswerStream(response: Response, onProgress?: GoalCreationReporter): Promise<AdaptiveDiagnosticAnswerResult> {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(payload.error || "诊断评分失败，请稍后重试。");
+  }
+  if (!response.body) throw new Error("浏览器没有收到诊断评分进度流。");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: AdaptiveDiagnosticAnswerResult | null = null;
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return;
+    let event: Record<string, unknown>;
+    try { event = JSON.parse(line) as Record<string, unknown>; }
+    catch { throw new Error("诊断评分进度流格式不正确。"); }
+    if (event.type === "progress" && event.progress && typeof event.progress === "object") {
+      const progress = event.progress as Record<string, unknown>;
+      if (typeof progress.stage === "string" && typeof progress.percent === "number" && typeof progress.message === "string") {
+        onProgress?.({ stage: progress.stage, percent: Math.max(0, Math.min(100, progress.percent)), message: progress.message, status: "running" });
+      }
+      return;
+    }
+    if (event.type === "error") throw new Error(typeof event.error === "string" ? event.error : "诊断评分失败，请稍后重试。");
+    if (event.type === "result" && event.result && typeof event.result === "object") result = event.result as AdaptiveDiagnosticAnswerResult;
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(consumeLine);
+      if (done) break;
+    }
+    consumeLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+  if (!result) throw new Error("诊断评分完成，但服务端没有返回结果。");
+  return result;
+}
 
 const REVIEW_STORAGE_KEY = "growth-loop.review-enabled.v1";
 const POMODORO_FOCUS_SECONDS = 25 * 60;
@@ -123,7 +246,6 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [tasks, setTasks] = useState<Task[]>([]);
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isFocusRunning, setIsFocusRunning] = useState(false);
   const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>("focus");
   const [pomodoroSeconds, setPomodoroSeconds] = useState(POMODORO_FOCUS_SECONDS);
   const [isPomodoroRunning, setIsPomodoroRunning] = useState(false);
@@ -131,9 +253,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [isRemindersPaused, setIsRemindersPaused] = useState(false);
   const [reviewEnabled, setReviewEnabled] = useState(true);
   const [toast, setToast] = useState("");
-  const [assistantReply, setAssistantReply] = useState("把今天发生的事直接写给我就好。白天我先帮你收好记录，晚上 21:30 再把今天几条记录合在一起，统一问你最重要的一步、真正理解的地方和明天的行动。" );
   const [isAgentBusy, setIsAgentBusy] = useState(false);
-  const [isMobileExperience, setIsMobileExperience] = useState(false);
   const [activeQuiz, setActiveQuiz] = useState<QuizSession | null>(null);
   const [isQuizOverlayOpen, setIsQuizOverlayOpen] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
@@ -141,6 +261,20 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [quizBusy, setQuizBusy] = useState(false);
   const [quizSourceLogId, setQuizSourceLogId] = useState<string | null>(null);
   const [quizError, setQuizError] = useState("");
+  const [currentHour, setCurrentHour] = useState<number | null>(null);
+  const [todayModeOverride, setTodayModeOverride] = useState<TodayMode | null>(null);
+  const [isQuickLogOpen, setIsQuickLogOpen] = useState(false);
+  const [courseTarget, setCourseTarget] = useState<CourseTarget | null>(null);
+  const [activeProgramId, setActiveProgramId] = useState("");
+  const [pendingDiagnostic, setPendingDiagnostic] = useState<DiagnosticAssessment | null>(null);
+  const [diagnosticQuestionIndex, setDiagnosticQuestionIndex] = useState(0);
+  const [diagnosticAnswers, setDiagnosticAnswers] = useState<Record<string, string>>({});
+  const [diagnosticGrade, setDiagnosticGrade] = useState<DiagnosticGrade | null>(null);
+  const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+  const [diagnosticError, setDiagnosticError] = useState("");
+  const [diagnosticProgress, setDiagnosticProgress] = useState<GoalCreationProgress | null>(null);
+  const [diagnosticProgressEvents, setDiagnosticProgressEvents] = useState<GoalCreationProgress[]>([]);
+  const [diagnosticQuestionResult, setDiagnosticQuestionResult] = useState<DiagnosticQuestionResult | null>(null);
   const quickLogRef = useRef<HTMLTextAreaElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewTimer = useRef<number | null>(null);
@@ -157,6 +291,13 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
       if (storedReviewPreference !== null) setReviewEnabled(storedReviewPreference === "true");
     }, 0);
     return () => window.clearTimeout(reviewTimer);
+  }, []);
+
+  useEffect(() => {
+    const syncHour = () => setCurrentHour(new Date().getHours());
+    syncHour();
+    const timer = window.setInterval(syncHour, 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -181,19 +322,6 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     return () => { cancelled = true; };
   }, [router]);
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 820px)");
-    const isAndroidWebView = /Android/i.test(window.navigator.userAgent);
-    const syncExperience = () => setIsMobileExperience(Capacitor.isNativePlatform() || isAndroidWebView || mediaQuery.matches);
-    syncExperience();
-    mediaQuery.addEventListener?.("change", syncExperience);
-    mediaQuery.addListener?.(syncExperience);
-    return () => {
-      mediaQuery.removeEventListener?.("change", syncExperience);
-      mediaQuery.removeListener?.(syncExperience);
-    };
-  }, []);
-
   useEffect(() => () => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
@@ -207,7 +335,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
       if (nextReview.getTime() <= now.getTime()) nextReview.setDate(nextReview.getDate() + 1);
       reviewTimer.current = window.setTimeout(() => {
         setInput((value) => value || "今晚回顾");
-        setAssistantReply("到晚间了。我会根据今天的记录统一追问三件事：最重要的行动、真正理解或应用的地方、明天的一步。先从你最想保留的一件事开始。" );
+        setTodayModeOverride("evening");
         setActiveTab("今日");
         notify("21:30 晚间回顾已准备好");
         scheduleNextReview();
@@ -247,11 +375,6 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     notify(isPomodoroRunning ? "番茄钟已暂停，进度会保留" : `${pomodoroMode === "focus" ? "25 分钟专注" : "5 分钟恢复"}已开始`);
   }
 
-  function toggleFocusSession() {
-    setIsFocusRunning((running) => !running);
-    notify(isFocusRunning ? "专注已暂停，进度会保留" : "专注已开始，先做 10 分钟");
-  }
-
   function resetPomodoro() {
     setIsPomodoroRunning(false);
     setPomodoroSeconds(pomodoroMode === "focus" ? POMODORO_FOCUS_SECONDS : POMODORO_BREAK_SECONDS);
@@ -265,37 +388,14 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   }
 
   const doneCount = tasks.filter((task) => task.status === "done").length;
-  const earnedCoins = tasks.filter((task) => task.status === "done").reduce((total, task) => total + task.coin, 0) + logs.reduce((total, log) => total + log.coin, 0);
+  const automaticTodayMode: TodayMode = currentHour !== null && (currentHour >= 19 || currentHour < 5) ? "evening" : "day";
+  const todayMode = todayModeOverride || automaticTodayMode;
 
   const greeting = useMemo(() => {
     if (doneCount === tasks.length) return "今天的回路已经闭合";
     if (doneCount > 0) return "很好，今天已经开始转起来了";
     return `早上好，${currentUser.displayName}`;
   }, [currentUser.displayName, doneCount, tasks.length]);
-
-  async function toggleTask(id: string) {
-    const previousTasks = tasks;
-    setTasks((current) =>
-      current.map((task) => {
-        if (task.id !== id) return task;
-        const nextStatus = task.status === "done" ? "upcoming" : "done";
-        return { ...task, status: nextStatus };
-      }),
-    );
-    const target = tasks.find((task) => task.id === id);
-    if (target?.status === "done") {
-      notify("已把这次行动放回今日计划");
-    } else {
-      notify(`+${target?.xp ?? 0} XP · +${target?.coin ?? 0} 积分，行动已记下`);
-    }
-    try {
-      const response = await fetch(`/api/tasks/${encodeURIComponent(id)}`, { method: "PATCH" });
-      if (!response.ok) throw new Error("task update unavailable");
-    } catch {
-      setTasks(previousTasks);
-      notify("任务状态没有保存成功，请稍后重试");
-    }
-  }
 
   async function generateQuiz(content: string, topic?: string, output?: string, sourceLogId?: string, openOverlay = false) {
     if (!content.trim()) return;
@@ -368,9 +468,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     setIsQuizOverlayOpen(false);
   }
 
-  async function submitLog() {
-    const message = input.trim();
-    if (!message) return;
+  async function persistLog(message: string) {
     const isEveningReview = /^今晚回顾/.test(message);
     const reviewContext = isEveningReview
       ? logs.slice(0, 12).map((log) => `- ${log.topic || "今日记录"}：${log.text}`).join("\n")
@@ -389,7 +487,6 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     commitLogs([optimisticLog, ...logs]);
     setInput("");
     setIsAgentBusy(true);
-    setAssistantReply("已记下。白天先不用停下来答题，今晚的晚报会把今天的记录合在一起，再统一追问。" );
     notify("已保存，晚报时统一回顾");
 
     try {
@@ -400,7 +497,6 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
       });
       if (!response.ok) throw new Error("agent unavailable");
       const result = (await response.json()) as { reply?: string; log?: LogEntry; streak?: number };
-      setAssistantReply(result.reply || "已记下。今晚我会根据今天的记录统一追问，帮助你把经历变成明天可用的经验。" );
       setLogs((current) => current.map((log) => log.id === id ? (result.log || { ...log, topic: message, mode: "demo" }) : log));
       if (typeof result.streak === "number") {
         const nextStreak = result.streak;
@@ -408,17 +504,22 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
       }
     } catch {
       setLogs((current) => current.map((log) => log.id === id ? { ...log, topic: message || "学习记录", mode: "demo" } : log));
-      setAssistantReply("这条记录暂时没有写入数据库，请检查服务后重试。" );
       notify("保存失败，请稍后重试");
     } finally {
       setIsAgentBusy(false);
     }
   }
 
+  async function submitLog() {
+    const message = input.trim();
+    if (!message) return;
+    setIsQuickLogOpen(false);
+    await persistLog(message);
+  }
+
   function focusQuickLog() {
-    setActiveTab("记录");
+    setIsQuickLogOpen(true);
     window.setTimeout(() => {
-      quickLogRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       quickLogRef.current?.focus();
     }, 80);
   }
@@ -432,13 +533,218 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
 
   function startEveningReview() {
     setInput((value) => value || "今晚回顾" );
-    setAssistantReply("晚报会把今天的记录合在一起，依次问你：最重要的行动、真正理解或应用的地方、明天的一步。你只要先告诉我最想保留的一件事。" );
+    setTodayModeOverride("evening");
     setActiveTab("今日");
-    window.setTimeout(() => {
-      quickLogRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      quickLogRef.current?.focus();
-    }, 80);
+    setIsQuickLogOpen(true);
+    window.setTimeout(() => quickLogRef.current?.focus(), 80);
     notify("晚间回顾已准备好，写下今天最重要的一件事");
+  }
+
+  function openTaskCourse(task: Task) {
+    setCourseTarget({ taskId: task.id, lessonId: task.lessonId });
+    if (task.programId) setActiveProgramId(task.programId);
+    setActiveTab("课程");
+  }
+
+  function handleLessonPassed(lesson: CourseLesson, grade: CourseLessonGrade) {
+    const task = tasks.find((item) => item.lessonId === lesson.id) || tasks.find((item) => item.id === courseTarget?.taskId);
+    // 服务端评分事务已经完成关联任务，这里只同步界面，不再发普通任务 PATCH。
+    if (task && task.status !== "done") setTasks((current) => current.map((item) => item.id === task.id ? { ...item, status: "done" } : item));
+    notify(`本节评测${grade.level}，今日任务已同步完成`);
+  }
+
+  function submitEveningClosure(answers: string[]) {
+    const message = `今晚回顾：\n最重要的行动：${answers[0]}\n真正理解或应用：${answers[1]}\n明天的一步：${answers[2]}`;
+    void persistLog(message);
+  }
+
+  async function createGoal(value: CreateGoalInput, onProgress?: GoalCreationReporter) {
+    let latestPercent = 0;
+    const publishProgress = (progress: GoalCreationProgress) => {
+      latestPercent = Math.max(latestPercent, progress.percent);
+      onProgress?.({ ...progress, percent: latestPercent });
+    };
+    try {
+      publishProgress({ stage: "save_goal", percent: 2, message: "正在保存目标和学习偏好", status: "running" });
+      const response = await fetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(value),
+      });
+      const result = (await response.json()) as { goal?: Goal; error?: string };
+      if (!response.ok || !result.goal) throw new Error(result.error || "goal unavailable");
+      const goal = result.goal;
+      const createdGoal: Goal = {
+        ...goal,
+        selfLevel: value.selfLevel || undefined,
+        diagnosticStatus: value.selfLevel === "beginner" ? "skipped" : "pending",
+      };
+      setDashboard((current) => ({ ...current, goals: [...current.goals, createdGoal] }));
+      publishProgress({ stage: "save_goal", percent: 6, message: "目标已保存，正在启动学习工作流", status: "running" });
+
+      try {
+        // prepare-stream 会根据自评走诊断或课程分支，并返回真实节点进度。
+        const courseResponse = await fetch("/api/learning-program", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "prepare-stream", goalId: goal.id }),
+        });
+        const preparation = await readGoalPreparationStream(courseResponse, publishProgress);
+        if (preparation.nextAction === "diagnostic" && preparation.diagnostic) {
+          publishProgress({ stage: "complete", percent: 100, message: "初始诊断已准备好，可以开始作答", status: "done" });
+          setPendingDiagnostic(preparation.diagnostic);
+          setDiagnosticQuestionIndex(Math.max(0, preparation.diagnostic.questions.length - 1));
+          setDiagnosticAnswers({});
+          setDiagnosticGrade(null);
+          setDiagnosticError("");
+          setDiagnosticQuestionResult(null);
+          notify(`目标「${goal.title}」已创建，请先完成初始诊断`);
+          return "diagnostic" as const;
+        }
+        const program = preparation.program;
+        if (!program) throw new Error("course unavailable");
+        publishProgress({ stage: "complete", percent: 100, message: "学习路径已准备完成", status: "done" });
+        window.localStorage.setItem(PROGRAM_STORAGE_KEY, program.programId);
+        setActiveProgramId(program.programId);
+        setDashboard((current) => ({
+          ...current,
+          goals: current.goals.map((item) => item.id === goal.id ? { ...item, learningProgramId: program.programId } : item),
+        }));
+        setCourseTarget(null);
+        notify(`目标「${goal.title}」已创建，课程也编排好了`);
+        return "course" as const;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "请稍后重试";
+        publishProgress({ stage: "error", percent: latestPercent, message, status: "error" });
+        notify(`目标「${goal.title}」已创建，但学习路径准备失败：${message}`);
+        return "goal" as const;
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "目标没有保存成功，请稍后重试";
+      publishProgress({ stage: "error", percent: latestPercent, message, status: "error" });
+      notify(message);
+      return false as const;
+    }
+  }
+
+  async function deleteLongTermGoal(goal: Goal) {
+    try {
+      const response = await fetch("/api/goals", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goalId: goal.id }),
+      });
+      const result = (await response.json()) as { deleted?: { deletedTaskIds?: string[] }; error?: string };
+      if (!response.ok || !result.deleted) throw new Error(result.error || "目标删除失败。");
+      const deletedTaskIds = new Set(result.deleted.deletedTaskIds || []);
+      setDashboard((current) => ({ ...current, goals: current.goals.filter((item) => item.id !== goal.id) }));
+      setTasks((current) => current.filter((task) => !deletedTaskIds.has(task.id) && task.id !== `goal-step-${goal.id}`));
+      if (pendingDiagnostic?.goalId === goal.id) setPendingDiagnostic(null);
+      if (goal.learningProgramId && activeProgramId === goal.learningProgramId) {
+        setActiveProgramId("");
+        if (window.localStorage.getItem(PROGRAM_STORAGE_KEY) === goal.learningProgramId) {
+          window.localStorage.removeItem(PROGRAM_STORAGE_KEY);
+        }
+      }
+      notify(`长期目标「${goal.title}」已删除`);
+      return true;
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "目标删除失败，请稍后重试。");
+      return false;
+    }
+  }
+
+  async function submitDiagnostic() {
+    if (!pendingDiagnostic || !diagnosticQuestion || diagnosticBusy) return;
+    const answer = diagnosticAnswers[diagnosticQuestion.id]?.trim() || "";
+    if (!answer) {
+      setDiagnosticError("请先回答当前题目。不会也可以写出目前的判断。");
+      return;
+    }
+    setDiagnosticBusy(true);
+    setDiagnosticError("");
+    setDiagnosticProgress({ stage: "start", percent: 2, message: "正在启动考官评分流程", status: "running" });
+    setDiagnosticProgressEvents([]);
+    try {
+      const response = await fetch("/api/diagnostics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "answer-stream",
+          assessmentId: pendingDiagnostic.id,
+          questionId: diagnosticQuestion.id,
+          answer,
+        }),
+      });
+      const result = await readDiagnosticAnswerStream(response, (progress) => {
+        setDiagnosticProgress(progress);
+        setDiagnosticProgressEvents((current) => {
+          const previous = current.at(-1);
+          if (previous?.stage === progress.stage) return [...current.slice(0, -1), progress].slice(-5);
+          return [...current, progress].slice(-5);
+        });
+      });
+      if (result.questionResult) setDiagnosticQuestionResult(result.questionResult);
+      if (!result.complete) {
+        if (!result.assessment) throw new Error("下一题已经生成，但诊断状态无法读取。");
+        setPendingDiagnostic(result.assessment);
+        setDiagnosticQuestionIndex(Math.max(0, result.assessment.questions.length - 1));
+        setDiagnosticAnswers({});
+        const direction = result.questionResult?.direction === "harder" ? "难度已上调" : result.questionResult?.direction === "easier" ? "难度已下调" : "已切换到下一项能力";
+        notify(`本题 ${result.questionResult?.score ?? 0}/10，${direction}`);
+        return;
+      }
+      if (!result.grade || !result.program) throw new Error("诊断已结束，但课程结果无法读取。");
+      setDiagnosticGrade(result.grade);
+      window.localStorage.setItem(PROGRAM_STORAGE_KEY, result.program.programId);
+      setActiveProgramId(result.program.programId);
+      setDashboard((current) => ({
+        ...current,
+        goals: current.goals.map((item) => item.id === pendingDiagnostic.goalId
+          ? { ...item, diagnosticStatus: "completed", learningProgramId: result.program!.programId }
+          : item),
+      }));
+      setCourseTarget(null);
+      notify(`初始诊断完成：${result.grade.score} 分，首节课程已生成`);
+      window.setTimeout(() => {
+        setPendingDiagnostic(null);
+        setActiveTab("课程");
+      }, 700);
+    } catch (caught) {
+      setDiagnosticError(caught instanceof Error ? caught.message : "诊断提交失败。");
+    } finally {
+      setDiagnosticBusy(false);
+      setDiagnosticProgress(null);
+      setDiagnosticProgressEvents([]);
+    }
+  }
+
+  async function resumeGoal(goal: Goal) {
+    try {
+      const response = await fetch("/api/learning-program", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "prepare", goalId: goal.id }),
+      });
+      const result = (await response.json()) as { preparation?: GoalPreparation; error?: string };
+      if (!response.ok || !result.preparation) throw new Error(result.error || "学习路径暂时不可用。");
+      if (result.preparation.nextAction === "diagnostic" && result.preparation.diagnostic) {
+        setPendingDiagnostic(result.preparation.diagnostic);
+        setDiagnosticQuestionIndex(Math.max(0, result.preparation.diagnostic.questions.length - 1));
+        setDiagnosticAnswers({});
+        setDiagnosticGrade(null);
+        setDiagnosticError("");
+        setDiagnosticQuestionResult(null);
+        return;
+      }
+      if (!result.preparation.program) throw new Error("课程暂时不可用。");
+      window.localStorage.setItem(PROGRAM_STORAGE_KEY, result.preparation.program.programId);
+      setActiveProgramId(result.preparation.program.programId);
+      setCourseTarget(null);
+      setActiveTab("课程");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "学习路径暂时不可用。");
+    }
   }
 
   function splitGoal(goal: Goal) {
@@ -461,51 +767,49 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     notify(`已把「${goal.title}」拆成一个明天可执行的行动`);
   }
 
-  function addCourseLessonToToday(lesson: CourseLesson) {
-    const taskId = `course-${lesson.id}`;
-    setTasks((current) => current.some((task) => task.id === taskId) ? current : [
-      ...current,
-      {
-        id: taskId,
-        title: `课程 · ${lesson.title}`,
-        subtitle: lesson.deliverable,
-        time: "今天",
-        duration: `${lesson.durationMinutes} min`,
-        xp: 18,
-        coin: 6,
-        status: "upcoming",
-        kind: "learn",
-      },
-    ]);
-    notify(`已把「${lesson.title}」放进今日计划`);
+  async function addCourseLessonToToday(lesson: CourseLesson) {
+    if (tasks.some((task) => task.lessonId === lesson.id)) {
+      notify(`「${lesson.title}」已经在今日计划中`);
+      return;
+    }
+    try {
+      // 任务标题、时长和合格线由服务端按 lessonId 取自课程本身，并写入 task_lesson_links。
+      const response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lessonId: lesson.id }),
+      });
+      const result = (await response.json()) as { task?: { id: string }; error?: string };
+      if (!response.ok || !result.task) throw new Error(result.error || "task create unavailable");
+      const taskId = result.task.id;
+      setTasks((current) => current.some((task) => task.id === taskId) ? current : [
+        ...current,
+        {
+          id: taskId,
+          title: `课程 · ${lesson.title}`,
+          subtitle: lesson.deliverable,
+          time: "今天",
+          duration: `${lesson.durationMinutes} min`,
+          xp: 18,
+          coin: 6,
+          status: "upcoming",
+          kind: "learn",
+          lessonId: lesson.id,
+          programId: activeProgramId || undefined,
+        },
+      ]);
+      notify(`已把「${lesson.title}」放进今日计划`);
+    } catch {
+      notify("课程没有加入今日计划，请稍后重试");
+    }
   }
 
-  if (isMobileExperience) {
-    return <MobileAppShell
-      activeTab={activeTab}
-      onNavigate={(tab) => setActiveTab(tab)}
-      tasks={tasks}
-      logs={logs}
-      doneCount={doneCount}
-      earnedCoins={earnedCoins}
-      input={input}
-      setInput={setInput}
-      onSubmit={submitLog}
-      onToggleTask={toggleTask}
-      onSplitGoal={splitGoal}
-      assistantReply={assistantReply}
-      isAgentBusy={isAgentBusy}
-      reviewEnabled={reviewEnabled}
-      onToggleReview={toggleReviewSchedule}
-      onStartReview={startEveningReview}
-      isFocusRunning={isFocusRunning}
-      onToggleFocus={toggleFocusSession}
-      onLogout={logout}
-      toast={toast}
-      dashboard={dashboard}
-      learningStudio={<LearningStudio compact onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} />}
-    />;
-  }
+  const diagnosticQuestion = pendingDiagnostic?.questions[diagnosticQuestionIndex];
+  const diagnosticQuestionCount = pendingDiagnostic?.maxQuestions || pendingDiagnostic?.questions.length || 0;
+  const diagnosticAnsweredCount = pendingDiagnostic?.answeredCount || 0;
+  const diagnosticStepPercent = diagnosticQuestionCount
+    ? Math.round(((diagnosticAnsweredCount + 1) / diagnosticQuestionCount) * 100)
+    : 0;
 
   return (
     <main className={`app-shell ${activeTab === "今日" ? "home-shell" : ""}`}>
@@ -557,28 +861,26 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
         </header>
 
         <div className="content-wrap">
-          <section className="hero-row">
+          {activeTab !== "今日" && <section className="hero-row">
             <div>
               <div className="eyebrow"><span className="eyebrow-line" /> {tabCopy[activeTab].eyebrow} <span className="eyebrow-muted">/ {tabCopy[activeTab].suffix}</span></div>
-              <h1>{activeTab === "今日" ? greeting : tabCopy[activeTab].eyebrow}</h1>
+              <h1>{tabCopy[activeTab].eyebrow}</h1>
               <p className="hero-copy">{tabCopy[activeTab].description}</p>
             </div>
-            <div className="hero-actions"><button className="quiet-button" aria-pressed={isRemindersPaused} onClick={() => { setIsRemindersPaused((paused) => !paused); notify(isRemindersPaused ? "提醒已恢复" : "提醒已暂停，今天不会主动打扰你"); }}><Pause size={15} /> {isRemindersPaused ? "恢复提醒" : "暂停提醒"}</button><button className="primary-button" onClick={focusQuickLog}><Plus size={16} /> 快速记录</button></div>
-          </section>
+            <div className="hero-actions"><button className="quiet-button" aria-pressed={isRemindersPaused} onClick={() => { setIsRemindersPaused((paused) => !paused); notify(isRemindersPaused ? "提醒已恢复" : "提醒已暂停，今天不会主动打扰你"); }}><Pause size={15} /> {isRemindersPaused ? "恢复提醒" : "暂停提醒"}</button><button className="primary-button" onClick={focusQuickLog}><Plus size={16} /> 随手一记</button></div>
+          </section>}
 
           {activeTab === "今日" ? (
             <TodayHome
               greeting={greeting}
               tasks={tasks}
               doneCount={doneCount}
-              input={input}
-              setInput={setInput}
-              quickLogRef={quickLogRef}
-              onSubmit={submitLog}
-              onToggleTask={toggleTask}
+              mode={todayMode}
+              onSetMode={setTodayModeOverride}
+              onOpenQuickLog={focusQuickLog}
+              onOpenCourse={openTaskCourse}
+              onSubmitReview={submitEveningClosure}
               onOpenPlan={() => setActiveTab("计划")}
-              assistantReply={assistantReply}
-              isAgentBusy={isAgentBusy}
               reviewEnabled={reviewEnabled}
               onToggleReview={toggleReviewSchedule}
               onStartReview={startEveningReview}
@@ -587,24 +889,26 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel dashboard={dashboard} tasks={tasks} onToggleTask={toggleTask} onSplitGoal={splitGoal} onBackToToday={() => setActiveTab("今日")} />
+            <PlanPanel dashboard={dashboard} tasks={tasks} onSplitGoal={splitGoal} onResumeGoal={resumeGoal} onCreateGoal={createGoal} onDeleteGoal={deleteLongTermGoal} onOpenCourse={() => setActiveTab("课程")} />
           ) : activeTab === "课程" ? (
-            <LearningStudio onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} />
+            <LearningStudio goals={dashboard.goals} onSelectGoal={resumeGoal} onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} programId={activeProgramId} targetLessonId={courseTarget?.lessonId} onLessonPassed={handleLessonPassed} />
           ) : activeTab === "记录" ? (
-            <RecordsPanel dashboard={dashboard} logs={logs} input={input} setInput={setInput} inputRef={quickLogRef} onSubmit={submitLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} onBackToToday={() => setActiveTab("今日")} />
+            <RecordsPanel dashboard={dashboard} logs={logs} onOpenQuickLog={focusQuickLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} />
           ) : (
-            <GrowthPanel dashboard={dashboard} onBackToToday={() => setActiveTab("今日")} />
+            <GrowthPanel dashboard={dashboard} />
           )}
         </div>
         <div className="mobile-nav">{tabs.map(({ label, icon: Icon }) => <button key={label} className={activeTab === label ? "active" : ""} onClick={() => setActiveTab(label)} aria-current={activeTab === label ? "page" : undefined}><Icon size={18} /><span>{label}</span></button>)}</div>
       </section>
 
-      <aside className="right-rail">
-        <div className="rail-card level-card"><div className="level-orbit"><div className="level-number">{String(currentUser.level).padStart(2, "0")}</div><div className="level-label">LV.</div></div><div><span className="card-kicker">CURRENT LEVEL</span><h3>{currentUser.role}</h3><p>账号 <strong>{currentUser.username}</strong> · 成长从第一次行动开始</p></div><div className="level-progress"><span style={{ width: `${Math.max(4, currentUser.focusScore)}%` }} /></div></div>
-        <div className="rail-card next-card"><div className="card-kicker">NEXT BEST ACTION</div><h3>{isFocusRunning ? "专注正在进行" : "先做 10 分钟"}</h3><p>{isFocusRunning ? "不用想着完成整件事，只要继续这一小段。" : "把主任务拆成一个最容易开始的动作，今天的回路会从这里转起来。"}</p><button className={`focus-button ${isFocusRunning ? "running" : ""}`} onClick={toggleFocusSession}>{isFocusRunning ? <><Pause size={15} /> 暂停专注</> : <><Play size={15} fill="currentColor" /> 开始专注</>}</button></div>
-        <div className="rail-card wallet-card"><div className="wallet-header"><div className="wallet-icon"><WalletCards size={17} /></div><span>成长积分</span><button className="icon-button subtle" aria-label="积分详情" onClick={() => notify(`当前余额 ${dashboard.user.coinBalance + earnedCoins} COIN，完成行动可继续增加`)}><ChevronRight size={16} /></button></div><div className="wallet-balance">{dashboard.user.coinBalance + earnedCoins}<span> COIN</span></div><div className="wallet-meta"><span>本次 +{earnedCoins}</span><button className="text-button" onClick={() => notify("兑换入口会在绑定你的现实奖励后开放")}>去兑换 <ChevronRight size={14} /></button></div></div>
-        <div className="rail-card quote-card"><div className="quote-mark">“</div><p>{dashboard.quote}</p><span>— 今日回路</span></div>
-      </aside>
+      {isQuickLogOpen && <div className="quick-log-overlay" role="dialog" aria-modal="true" aria-label="随手一记">
+        <button className="quick-log-backdrop" aria-label="关闭随手一记" onClick={() => setIsQuickLogOpen(false)} />
+        <section className="quick-log-dialog">
+          <div className="quick-log-heading"><div><span className="eyebrow">QUICK NOTE</span><h2>随手一记</h2><p>先把发生的事留下来，不需要现在分类或整理。</p></div><button className="quiz-close-button" onClick={() => setIsQuickLogOpen(false)}><X size={15} /> 关闭</button></div>
+          <textarea ref={quickLogRef} value={input} onChange={(event) => setInput(event.target.value)} maxLength={480} rows={7} placeholder="例如：今天看懂了 Agent 的工具调用，也发现自己对状态管理还不熟……" />
+          <div className="quick-log-actions"><span>{input.length}/480 · 晚间统一回顾</span><button className="primary-button" onClick={() => void submitLog()} disabled={!input.trim() || isAgentBusy}>{isAgentBusy ? "正在保存" : "保存记录"}<ArrowUpRight size={15} /></button></div>
+        </section>
+      </div>}
 
       {activeQuiz && isQuizOverlayOpen && <div className="quiz-overlay" role="dialog" aria-modal="true" aria-label={`理解测验：${activeQuiz.topic}`}>
         <button className="quiz-overlay-backdrop" aria-label="关闭理解测验" onClick={closeQuizOverlay} />
@@ -612,6 +916,40 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
           <div className="quiz-overlay-toolbar"><span>正在专注：理解测验</span><button className="quiz-close-button" onClick={closeQuizOverlay}><X size={15} /> 关闭</button></div>
           <LearningQuizCard quiz={activeQuiz} answers={quizAnswers} grade={quizGrade} busy={quizBusy} error={quizError} onAnswer={(id, value) => setQuizAnswers((answers) => ({ ...answers, [id]: value }))} onGrade={gradeQuiz} onReset={resetQuiz} />
         </div>
+      </div>}
+
+      {pendingDiagnostic && diagnosticQuestion && <div className="quiz-overlay diagnostic-overlay" role="dialog" aria-modal="true" aria-label={`自适应初始诊断，第 ${diagnosticAnsweredCount + 1} 题，最多 ${diagnosticQuestionCount} 题`}>
+        <button className="quiz-overlay-backdrop" aria-label="稍后继续诊断" onClick={() => setPendingDiagnostic(null)} />
+        <div className="quiz-overlay-dialog diagnostic-dialog">
+          <div className="quiz-overlay-toolbar"><span>自适应诊断 · 已完成 {diagnosticAnsweredCount} 题 · 最多 {diagnosticQuestionCount} 题</span><button className="quiz-close-button" onClick={() => setPendingDiagnostic(null)}><X size={15} /> 稍后继续</button></div>
+          <section className="diagnostic-card">
+            <div className="diagnostic-heading"><span className="eyebrow">ADAPTIVE BASELINE CHECK</span><h2>逐题寻找你的能力边界</h2><p>每次提交后立即评分：证据充分就提高难度，证据不足就降低难度或换基础题；上下界收敛后会提前结束。</p></div>
+            <div className="diagnostic-step-heading"><span>第 {String(diagnosticAnsweredCount + 1).padStart(2, "0")} 题 / 最多 {String(diagnosticQuestionCount).padStart(2, "0")} 题</span><strong>{diagnosticStepPercent}%</strong></div>
+            <div className="diagnostic-step-track" role="progressbar" aria-label="初始诊断答题进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={diagnosticStepPercent}><span style={{ width: `${diagnosticStepPercent}%` }} /></div>
+            {diagnosticQuestionResult && <div className={`diagnostic-adaptive-feedback is-${diagnosticQuestionResult.direction}`}><strong>上一题 {diagnosticQuestionResult.score}/{diagnosticQuestionResult.maxScore}</strong><span>{diagnosticQuestionResult.feedback}</span><em>{diagnosticQuestionResult.direction === "harder" ? "难度上调" : diagnosticQuestionResult.direction === "easier" ? "难度下调" : "切换能力继续确认"}</em></div>}
+            <label className="learning-question diagnostic-question-card" key={diagnosticQuestion.id}>
+              <span>难度 {diagnosticQuestion.difficulty}</span>
+              <strong>{diagnosticQuestion.prompt}</strong>
+              <small>{diagnosticQuestion.hint}</small>
+              <textarea autoFocus value={diagnosticAnswers[diagnosticQuestion.id] || ""} onChange={(event) => setDiagnosticAnswers((current) => ({ ...current, [diagnosticQuestion.id]: event.target.value }))} rows={6} placeholder="写下你的判断、依据和验证方式。" />
+            </label>
+            {diagnosticError && <p className="learning-error" role="alert">{diagnosticError}</p>}
+            {diagnosticGrade && <div className="diagnostic-result"><strong>{diagnosticGrade.score} 分 · {diagnosticGrade.level}</strong><span>{diagnosticGrade.summary}</span></div>}
+            <div className="diagnostic-navigation"><span>提交后将锁定本题证据，并据此生成下一题</span><button className="primary-button" type="button" onClick={() => void submitDiagnostic()} disabled={diagnosticBusy || !diagnosticAnswers[diagnosticQuestion.id]?.trim()}>提交本题并自适应出题<ArrowUpRight size={15} /></button></div>
+          </section>
+        </div>
+      </div>}
+
+      {diagnosticBusy && diagnosticProgress && <div className="quick-log-overlay diagnostic-scoring-overlay" role="dialog" aria-modal="true" aria-label="考官正在评分">
+        <div className="quick-log-backdrop" />
+        <section className="quick-log-dialog goal-progress-dialog diagnostic-scoring-dialog" aria-busy="true" aria-live="polite">
+          <div className="goal-progress-animation" aria-hidden="true"><div className="goal-progress-orbit"><i /><i /><i /></div><span><Brain size={21} /></span></div>
+          <div className="goal-progress-dialog-heading"><span className="eyebrow">EXAMINER WORKFLOW</span><h2>考官正在评估本题</h2><p>{diagnosticProgress.message}</p></div>
+          <div className="goal-creation-progress-heading"><strong>实际执行进度</strong><em>{diagnosticProgress.percent}%</em></div>
+          <div className="goal-creation-progress-track" role="progressbar" aria-label="考官评分进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={diagnosticProgress.percent}><span style={{ width: `${diagnosticProgress.percent}%` }} /></div>
+          <div className="goal-creation-progress-events">{diagnosticProgressEvents.map((event, index) => <div className={index === diagnosticProgressEvents.length - 1 ? "is-current" : "is-finished"} key={`${event.stage}-${index}`}><span className="goal-creation-event-icon">{index < diagnosticProgressEvents.length - 1 ? <Check size={11} /> : <i />}</span><span>{event.message}</span><em>{event.percent}%</em></div>)}</div>
+          <div className="goal-progress-dialog-footer"><span>只展示评分节点与产物，不展示模型内部推理原文。</span></div>
+        </section>
       </div>}
 
       {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-status" /> {toast}</div>}
@@ -629,14 +967,12 @@ type TodayHomeProps = {
   greeting: string;
   tasks: Task[];
   doneCount: number;
-  input: string;
-  setInput: React.Dispatch<React.SetStateAction<string>>;
-  quickLogRef: React.RefObject<HTMLTextAreaElement | null>;
-  onSubmit: () => void;
-  onToggleTask: (id: string) => void;
+  mode: TodayMode;
+  onSetMode: (mode: TodayMode) => void;
+  onOpenQuickLog: () => void;
+  onOpenCourse: (task: Task) => void;
+  onSubmitReview: (answers: string[]) => void;
   onOpenPlan: () => void;
-  assistantReply: string;
-  isAgentBusy: boolean;
   reviewEnabled: boolean;
   onToggleReview: () => void;
   onStartReview: () => void;
@@ -645,55 +981,65 @@ type TodayHomeProps = {
   pomodoro: React.ReactNode;
 };
 
-function TodayHome({ greeting, tasks, doneCount, input, setInput, quickLogRef, onSubmit, onToggleTask, onOpenPlan, assistantReply, isAgentBusy, reviewEnabled, onToggleReview, onStartReview, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
+function TodayHome({ greeting, tasks, doneCount, mode, onSetMode, onOpenQuickLog, onOpenCourse, onSubmitReview, onOpenPlan, reviewEnabled, onToggleReview, onStartReview, pomodoroVisible, onTogglePomodoro, pomodoro }: TodayHomeProps) {
   const visibleTasks = tasks.slice(0, 4);
+  const [reviewAnswers, setReviewAnswers] = useState(["", "", ""]);
+  const completion = tasks.length ? Math.round((doneCount / tasks.length) * 100) : 0;
+  const remainingMinutes = tasks.filter((task) => task.status !== "done").reduce((total, task) => total + (Number.parseInt(task.duration, 10) || 0), 0);
+  const currentTask = tasks.find((task) => task.status !== "done");
+
+  function submitReview() {
+    if (reviewAnswers.some((answer) => !answer.trim())) return;
+    onSubmitReview(reviewAnswers.map((answer) => answer.trim()));
+    setReviewAnswers(["", "", ""]);
+  }
+
   return <div className="home-command-center">
     <section className="home-intro">
       <div>
-        <div className="eyebrow"><span className="eyebrow-line" /> AI DAILY COMPANION <span className="eyebrow-muted">/ 今天只推进下一步</span></div>
+        <div className="eyebrow"><span className="eyebrow-line" /> {mode === "day" ? "DAY MODE" : "EVENING MODE"} <span className="eyebrow-muted">/ {mode === "day" ? "今天只推进下一步" : "把今天收束成明天能用的经验"}</span></div>
         <h1>{greeting}</h1>
-        <p className="home-intro-copy">随手记下今天发生的事，白天不打断节奏；晚上 AI 再把一天收束成经验。</p>
+        <p className="home-intro-copy">{mode === "day" ? "先完成今天真正重要的事，需要时再随手留下一笔。" : "看看今天完成了什么，再用三个问题结束这一天。"}</p>
       </div>
-      <div className="home-intro-stamp"><span className="home-stamp-dot" />{reviewEnabled ? "今晚 21:30 回顾" : "晚间回顾已关闭"}</div>
+      <div className="today-mode-switch" aria-label="切换今日时段"><button className={mode === "day" ? "active" : ""} onClick={() => onSetMode("day")}>白天</button><button className={mode === "evening" ? "active" : ""} onClick={() => onSetMode("evening")}>晚上</button></div>
     </section>
 
-    <section className="ai-dialog-card" aria-label="AI 今日对话入口">
-      <div className="ai-dialog-head">
-        <div className="ai-avatar"><Sparkles size={18} /></div>
-         <div className="ai-dialog-copy"><span className="card-kicker">AI TODAY ENTRY</span><strong>随手告诉我刚刚发生了什么</strong><p>{assistantReply}</p></div>
-        <span className={`ai-activity-state ${isAgentBusy ? "is-busy" : ""}`}><span />{isAgentBusy ? "整理中" : "在线"}</span>
+    <section className="progress-card today-progress-card" aria-label="今日完成情况">
+      <div className="progress-ring" style={{ background: `conic-gradient(var(--coral) ${completion * 3.6}deg, #36515f 0deg)` }}><div><strong>{doneCount}/{tasks.length}</strong><span>今日行动</span></div></div>
+      <div className="progress-card-copy">
+        <span className="card-kicker">{mode === "day" ? "CURRENT FOCUS" : "TODAY SUMMARY"}</span>
+        <h2>{mode === "day" ? (currentTask?.title || "今天的任务已经完成") : `今天完成了 ${doneCount} 项任务`}</h2>
+        <p>{mode === "day" ? (currentTask?.subtitle || "可以安心结束今天，或进入晚间回顾。") : (doneCount === tasks.length ? "今天的行动已经全部闭环。" : `还有 ${tasks.length - doneCount} 项没有完成，可以顺延到明天。`)}</p>
+        <div className="progress-track"><span style={{ width: `${completion}%` }} /></div>
       </div>
-      <div className="ai-composer">
-        <textarea ref={quickLogRef} value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：今天看了 Agent 的工具调用，终于理解了它和普通聊天的区别……" rows={4} aria-label="今天发生了什么" />
-        <div className="ai-composer-footer"><span>随手写就好，不用先整理格式 · {input.length}/480 · 晚间统一回顾</span><button className="ai-send-button" onClick={onSubmit} disabled={!input.trim() || isAgentBusy}><span>{isAgentBusy ? "AI 正在整理" : "保存记录"}</span><ArrowUpRight size={16} /></button></div>
-      </div>
-      <div className="ai-suggestion-row"><span>可以直接说：</span><button onClick={() => setInput("今天学了什么：")}>今天学了什么</button><button onClick={() => setInput("今天卡在哪里：")}>今天卡在哪里</button><button onClick={() => setInput("今晚回顾：")}>今晚回顾</button></div>
+      <div className="progress-card-meta"><span>{mode === "day" ? "预计剩余" : "完成率"}</span><strong>{mode === "day" ? `${remainingMinutes}m` : `${completion}%`}</strong></div>
     </section>
 
-    <section className="home-follow-up home-evening-report-hint"><div className="follow-up-icon"><BedDouble size={17} /></div><div><span className="eyebrow">EVENING REPORT · 21:30</span><strong>白天先记录，晚上再统一回答</strong><p>AI 会把今天的学习、运动、生活和休息合在一起，依次追问行动、理解与明天的一步。</p></div><span className="follow-up-count">晚报</span></section>
-
-    <section className="home-agenda-grid">
+    {mode === "day" ? <section className="home-agenda-grid is-day">
       <div className="home-agenda-card">
-        <div className="home-section-head"><div><span className="eyebrow">TODAY AGENDA</span><h2>今天要做的事</h2></div><span className="agenda-count">{doneCount}/{tasks.length} 完成</span></div>
-        <div className="home-agenda-list">{visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onToggle={onToggleTask} />)}</div>
+        <div className="home-section-head"><div><span className="eyebrow">TODAY ACTIONS</span><h2>今天要做的事</h2></div><div className="home-section-actions"><button className="text-button" onClick={onOpenPlan}>调整顺序</button><button className="quick-note-button" onClick={onOpenQuickLog}><Plus size={14} /> 随手一记</button></div></div>
+        <div className="home-agenda-list">{visibleTasks.map((task) => <HomeAgendaRow key={task.id} task={task} onOpenCourse={onOpenCourse} />)}</div>
+        {tasks.length === 0 && <div className="home-empty-state"><strong>今天还没有任务</strong><p>先在计划页创建目标，或从课程中加入一节课。</p></div>}
         <div className="home-agenda-footer"><button className="home-more-button" onClick={onOpenPlan}>查看完整计划 <ChevronRight size={15} /></button><button className="home-focus-link" onClick={onTogglePomodoro}><Timer size={14} />{pomodoroVisible ? "收起专注工具" : "需要节奏？打开 25 分钟"}</button></div>
         {pomodoroVisible && <div className="home-pomodoro-slot">{pomodoro}</div>}
       </div>
-
-      <aside className="home-review-card"><div className="home-section-head"><div><span className="eyebrow">EVENING REVIEW</span><h2>每日收束</h2></div><BedDouble size={18} className="panel-icon" /></div><p>AI 会在晚上问你一个问题：今天什么值得保留？把行动变成明天能用的经验。</p><div className="review-time-row"><strong>21:30</strong><span>每天一次 · 轻提醒</span><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "已开启" : "已关闭"}</button></div><button className="review-start-button" onClick={onStartReview}>现在开始回顾 <ArrowUpRight size={15} /></button></aside>
-    </section>
-
-    <div className="home-trust-line"><span><Sparkles size={13} /> AI 只在需要时出现</span><span>计划、成长和账本会在你需要时展开</span><button className="text-button" onClick={onOpenPlan}>打开计划地图 <ChevronRight size={14} /></button></div>
+    </section> : <section className="evening-closure-card">
+      <div className="home-section-head"><div><span className="eyebrow">DAILY CLOSURE</span><h2>每日收束</h2><p>三句话就够了。AI 会把答案与今天的记录放在一起。</p></div><button className={`review-toggle ${reviewEnabled ? "is-enabled" : ""}`} aria-pressed={reviewEnabled} onClick={onToggleReview}><span />{reviewEnabled ? "21:30 已开启" : "提醒已关闭"}</button></div>
+      <div className="closure-question-list">
+        {["今天最重要的行动是什么？", "今天真正理解或应用了什么？", "明天最小的一步是什么？"].map((question, index) => <label className="closure-question" key={question}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{question}</strong><textarea rows={2} maxLength={100} value={reviewAnswers[index]} onChange={(event) => setReviewAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? event.target.value : answer))} placeholder="用一句自己的话回答……" /></div></label>)}
+      </div>
+      <div className="closure-actions"><button className="quiet-button" onClick={onStartReview}>使用 AI 引导</button><button className="primary-button" onClick={submitReview} disabled={reviewAnswers.some((answer) => !answer.trim())}>完成今日收束 <ArrowUpRight size={15} /></button></div>
+    </section>}
   </div>;
 }
 
-function HomeAgendaRow({ task, onToggle }: { task: Task; onToggle: (id: string) => void }) {
-  return <article className={`home-agenda-row ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`}>
+function HomeAgendaRow({ task, onOpenCourse }: { task: Task; onOpenCourse: (task: Task) => void }) {
+  return <button className={`home-agenda-row ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`} onClick={() => onOpenCourse(task)}>
     <div className="home-agenda-time"><strong>{task.time}</strong><span>{task.duration}</span></div>
     <div className={`home-agenda-kind kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 15)}</div>
-    <div className="home-agenda-copy"><div><strong>{task.title}</strong><span className={`home-kind-label kind-${task.kind}`}>{taskKindLabel(task.kind)}</span></div><p>{task.subtitle}</p></div>
-    <button className={`home-agenda-check ${task.status === "done" ? "is-done" : ""}`} onClick={() => onToggle(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={14} strokeWidth={3} /> : <span />}</button>
-  </article>;
+    <div className="home-agenda-copy"><div><strong>{task.title}</strong><span className={`home-kind-label kind-${task.kind}`}>{task.status === "done" ? "已完成" : "进入课程"}</span></div><p>{task.subtitle}</p><small>{task.status === "done" ? "评测已通过" : "点击进入对应课程，答题合格后完成"}</small></div>
+    <span className="home-agenda-arrow"><ArrowUpRight size={15} /></span>
+  </button>;
 }
 
 function PomodoroWidget({ mode, seconds, isRunning, onToggle, onReset, onModeChange }: { mode: PomodoroMode; seconds: number; isRunning: boolean; onToggle: () => void; onReset: () => void; onModeChange: (mode: PomodoroMode) => void }) {
@@ -718,22 +1064,122 @@ function renderTaskKindIcon(kind: TaskKind, size: number) {
   return <Target size={size} />;
 }
 
-function WorkspaceHeader({ eyebrow, title, description, onBackToToday }: { eyebrow: string; title: string; description: string; onBackToToday: () => void }) {
-  return <div className="workspace-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div><button className="quiet-button" onClick={onBackToToday}><LayoutDashboard size={15} /> 回到今日</button></div>;
-}
+const EMPTY_GOAL_DRAFT: CreateGoalInput = { title: "", description: "", targetDate: "", background: "", weeklyHours: 4, selfLevel: "" };
 
-function PlanPanel({ dashboard, tasks, onToggleTask, onSplitGoal, onBackToToday }: { dashboard: DemoSeed; tasks: Task[]; onToggleTask: (id: string) => void; onSplitGoal: (goal: Goal) => void; onBackToToday: () => void }) {
+function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, onDeleteGoal, onOpenCourse }: { dashboard: DemoSeed; tasks: Task[]; onSplitGoal: (goal: Goal) => void; onResumeGoal: (goal: Goal) => Promise<void>; onCreateGoal: (value: CreateGoalInput, onProgress?: GoalCreationReporter) => Promise<false | "goal" | "course" | "diagnostic">; onDeleteGoal: (goal: Goal) => Promise<boolean>; onOpenCourse: () => void }) {
+  const [view, setView] = useState<"week" | "long">("week");
+  const [showCreateGoal, setShowCreateGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState<CreateGoalInput>(EMPTY_GOAL_DRAFT);
+  const [isCreating, setIsCreating] = useState(false);
+  const [creationProgress, setCreationProgress] = useState<GoalCreationProgress | null>(null);
+  const [creationEvents, setCreationEvents] = useState<GoalCreationProgress[]>([]);
+  const [goalToDelete, setGoalToDelete] = useState<Goal | null>(null);
+  const [isDeletingGoal, setIsDeletingGoal] = useState(false);
   const completed = tasks.filter((task) => task.status === "done").length;
+  const plannedWeeks = weeksUntil(goalDraft.targetDate || null);
+  const plannedHours = availableHours(goalDraft.targetDate || null, goalDraft.weeklyHours);
+  const showCreationProgress = isCreating || creationProgress?.status === "error";
+  const visibleCreationProgress: GoalCreationProgress = creationProgress || {
+    stage: "starting",
+    percent: 0,
+    message: "正在启动学习工作流",
+    status: "running",
+  };
+
+  async function submitGoal() {
+    if (!goalDraft.title.trim()) return;
+    setIsCreating(true);
+    setCreationProgress(null);
+    setCreationEvents([]);
+    const created = await onCreateGoal(
+      { ...goalDraft, title: goalDraft.title.trim(), description: goalDraft.description.trim(), background: goalDraft.background.trim() },
+      (progress) => {
+        setCreationProgress(progress);
+        setCreationEvents((current) => {
+          const previous = current.at(-1);
+          if (previous?.stage === progress.stage) return [...current.slice(0, -1), progress].slice(-5);
+          return [...current, progress].slice(-5);
+        });
+      },
+    );
+    setIsCreating(false);
+    if (!created) return;
+    setShowCreateGoal(false);
+    setGoalDraft(EMPTY_GOAL_DRAFT);
+    if (created === "course") onOpenCourse();
+    else setView("long");
+  }
+
+  function openCreateGoal() {
+    setCreationProgress(null);
+    setCreationEvents([]);
+    setShowCreateGoal(true);
+  }
+
+  async function confirmDeleteGoal() {
+    if (!goalToDelete || isDeletingGoal) return;
+    setIsDeletingGoal(true);
+    const deleted = await onDeleteGoal(goalToDelete);
+    setIsDeletingGoal(false);
+    if (deleted) setGoalToDelete(null);
+  }
+
   return <div className="workspace-page">
-    <WorkspaceHeader eyebrow="PLAN BOARD" title="计划地图" description="先看目标，再看今天要落地的那一步。" onBackToToday={onBackToToday} />
-    <div className="goal-grid">
-      {dashboard.goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.status}</span><span className="goal-horizon">{goal.horizon}</span></div><h3>{goal.title}</h3><p>{goal.description}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> 技能成长</span><button className="text-button" onClick={() => onSplitGoal(goal)}>拆成行动 <ChevronRight size={14} /></button></div></article>)}
-    </div>
-     <section className="panel agent-roadmap-panel"><div className="panel-heading"><div><span className="eyebrow">AI AGENT TRACK</span><h2>学习 Agent，并开发自己的 Agent</h2></div><Sparkles size={18} className="panel-icon" /></div><p className="panel-desc">这条路线把“学 AI”收敛成一个可以持续交付的小项目：先理解组成，再做最小闭环，最后用测验和真实任务验证。</p><div className="roadmap-stages"><div className="roadmap-stage"><span className="roadmap-number">01</span><div><strong>理解 Agent</strong><p>LLM、Prompt、工具调用、状态/记忆和评估。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">02</span><div><strong>做最小闭环</strong><p>信息 → 决策 → 工具 → 结果，先解决一个具体问题。</p></div></div><div className="roadmap-stage"><span className="roadmap-number">03</span><div><strong>验证与迭代</strong><p>留下可验证证据，用理解题、日志和用户反馈校准。</p></div></div></div><div className="roadmap-action"><div><span>今日建议 · 45 分钟</span><strong>定义你的 Agent 问题与验收标准</strong></div><button className="primary-button" onClick={() => onSplitGoal({ id: "goal-ai-agent", title: "学习 Agent 并开发自己的 Agent", description: "从一个具体问题做出最小可运行闭环", progress: 0, horizon: "今日路线", status: "进行中" })}>加入今日计划 <ArrowUpRight size={15} /></button></div></section>
-    <div className="plan-layout">
-      <section className="panel schedule-panel"><div className="panel-heading"><div><span className="eyebrow">TODAY TIMELINE</span><h2>今日时间轴</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">把任务放进现实的时间里，完成感会更具体。</p><div className="schedule-list">{tasks.map((task) => <div className={`schedule-card ${task.status === "done" ? "is-done" : task.status === "current" ? "is-current" : ""}`} key={task.id}><div className="schedule-time"><strong>{task.time}</strong><span>{task.duration}</span></div><div className={`schedule-icon kind-${task.kind}`}>{renderTaskKindIcon(task.kind, 16)}</div><div className="schedule-copy"><div className="task-title-line"><h3>{task.title}</h3><span className={`schedule-kind kind-${task.kind}`}>{taskKindLabel(task.kind)}</span>{task.status === "current" && <span className="now-pill">NOW</span>}</div><p>{task.subtitle}</p><span className="schedule-reward">+{task.xp} XP · +{task.coin} coin</span></div><button className={`task-check ${task.status === "done" ? "checked" : ""}`} onClick={() => onToggleTask(task.id)} aria-label={`${task.status === "done" ? "撤销" : "完成"}：${task.title}`}>{task.status === "done" ? <Check size={15} strokeWidth={3} /> : <span />}</button></div>)}</div></section>
-     <aside className="panel weekly-plan-panel"><div className="panel-heading"><div><span className="eyebrow">WEEKLY INTENT</span><h2>本周只做三件事</h2></div><ListChecks size={18} className="panel-icon" /></div><div className="intent-list"><div className="intent-item"><span className="intent-number">01</span><div><strong>完成首页第一版</strong><p>今天推进 45 分钟，周三前可演示。</p></div></div><div className="intent-item"><span className="intent-number">02</span><div><strong>英语听力保持表达</strong><p>不追求时长，每次留下 3 个表达。</p></div></div><div className="intent-item"><span className="intent-number">03</span><div><strong>周日做一次复盘</strong><p>比较行动证据，不比较情绪。</p></div></div></div><div className="plan-note"><Sparkles size={15} /><span>建议：今天完成主任务后，不再新增新的计划。</span></div></aside>
-    </div>
+    <div className="plan-view-toolbar"><div className="plan-view-switch"><button className={view === "week" ? "active" : ""} onClick={() => setView("week")}>本周任务</button><button className={view === "long" ? "active" : ""} onClick={() => setView("long")}>长期任务</button></div><button className="primary-button" onClick={openCreateGoal}><Plus size={15} /> 创建目标</button></div>
+
+    {view === "week" ? <section className="panel plan-timeline-panel"><div className="panel-heading"><div><span className="eyebrow">WEEK TIMELINE</span><h2>本周任务时间线</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">任务完成状态由对应课程的课后评测同步，计划页只负责看路径。</p><div className="plan-timeline">
+      {tasks.map((task, index) => <article className={`plan-timeline-item ${task.status === "done" ? "is-done" : ""}`} key={task.id}><div className="plan-timeline-marker"><span>{task.status === "done" ? <Check size={13} /> : String(index + 1).padStart(2, "0")}</span></div><div className="plan-timeline-copy"><span>{task.time} · {task.duration}</span><strong>{task.title}</strong><p>{task.subtitle}</p></div><em>{task.status === "done" ? "已完成" : task.status === "current" ? "进行中" : "待开始"}</em></article>)}
+      {tasks.length === 0 && <div className="records-empty"><strong>本周还没有任务</strong><p>创建长期目标后拆出下一步，或从课程中加入一节课。</p></div>}
+    </div></section> : <section className="long-goals-section"><div className="goal-grid">
+      {dashboard.goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "待初始诊断" : goal.status}</span><span className="goal-horizon">{goal.horizon}</span></div><h3>{goal.title}</h3><p>{goal.description}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> 长期目标</span><div className="goal-footer-actions"><button className="goal-delete-button" aria-label={`删除长期目标 ${goal.title}`} onClick={() => setGoalToDelete(goal)}><Trash2 size={12} /> 删除</button><button className="text-button" onClick={() => onSplitGoal(goal)}>拆出下一步</button><button className="text-button" onClick={() => void onResumeGoal(goal)}>{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "开始诊断" : "继续学习"} <ChevronRight size={14} /></button></div></div></article>)}
+      {dashboard.goals.length === 0 && <button className="goal-empty-card" onClick={openCreateGoal}><Plus size={18} /><strong>创建第一个长期目标</strong><span>写清想达到的结果和大致周期。</span></button>}
+    </div></section>}
+
+    {showCreateGoal && <div className="quick-log-overlay" role="dialog" aria-modal="true" aria-label="创建目标">
+      <button className="quick-log-backdrop" aria-label="关闭创建目标" disabled={isCreating} onClick={() => setShowCreateGoal(false)} />
+      {showCreationProgress ? <section className={`quick-log-dialog goal-progress-dialog is-${visibleCreationProgress.status}`} aria-busy={isCreating} aria-live="polite">
+        <div className="goal-progress-animation" aria-hidden="true">
+          <div className="goal-progress-orbit"><i /><i /><i /></div>
+          <span><Brain size={21} /></span>
+        </div>
+        <div className="goal-progress-dialog-heading"><span className="eyebrow">BUILDING YOUR PATH</span><h2>{visibleCreationProgress.status === "error" ? "学习路径准备失败" : "正在准备学习路径"}</h2><p>{visibleCreationProgress.message}</p></div>
+        <div className="goal-creation-progress-heading"><strong>实际执行进度</strong><em>{visibleCreationProgress.percent}%</em></div>
+        <div className="goal-creation-progress-track" role="progressbar" aria-label="学习路径创建进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={visibleCreationProgress.percent}><span style={{ width: `${visibleCreationProgress.percent}%` }} /></div>
+        <div className="goal-creation-progress-events">
+          {creationEvents.map((event, index) => <div className={index === creationEvents.length - 1 ? "is-current" : "is-finished"} key={`${event.stage}-${index}`}>
+            <span className="goal-creation-event-icon">{event.status === "error" ? <X size={11} /> : index < creationEvents.length - 1 || event.status === "done" ? <Check size={11} /> : <i />}</span>
+            <span>{event.message}</span><em>{event.percent}%</em>
+          </div>)}
+        </div>
+        <div className="goal-progress-dialog-footer"><span>展示工作流节点与产物进度，不包含模型内部推理原文。</span>{visibleCreationProgress.status === "error" && <button className="quiet-button" onClick={() => { setCreationProgress(null); setCreationEvents([]); }}>返回修改</button>}</div>
+      </section> : <section className="quick-log-dialog goal-create-dialog">
+        <div className="quick-log-heading">
+          <div><span className="eyebrow">NEW GOAL</span><h2>创建目标</h2><p>先拆出可评测能力；已有基础时先做小测，初学者直接进入首课。</p></div>
+          <button className="quiz-close-button" onClick={() => setShowCreateGoal(false)}><X size={15} /> 关闭</button>
+        </div>
+        <div className="goal-create-grid">
+          <label className="learning-field"><span>目标名称</span><input value={goalDraft.title} onChange={(event) => setGoalDraft((current) => ({ ...current, title: event.target.value }))} maxLength={100} placeholder="例如：做出可演示的学习助手" /></label>
+          <label className="learning-field"><span>目标日期</span><input type="date" value={goalDraft.targetDate} min={minTargetDate()} onChange={(event) => setGoalDraft((current) => ({ ...current, targetDate: event.target.value }))} /><small>留空表示不设期限</small></label>
+          <label className="learning-field goal-create-wide"><span>完成标准</span><textarea value={goalDraft.description} onChange={(event) => setGoalDraft((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={3} placeholder="课程结束时，你希望能独立完成什么？" /></label>
+          <fieldset className="learning-field goal-create-wide goal-level-field"><legend>当前掌握程度</legend><div className="goal-level-options">{([{ value: "beginner", label: "初学者", note: "直接从基础首课开始" }, { value: "familiar", label: "一知半解", note: "先做 5 题初始诊断" }, { value: "intermediate", label: "小有所成", note: "先做 8 题进阶诊断" }] as const).map((level) => <button type="button" key={level.value} className={goalDraft.selfLevel === level.value ? "active" : ""} onClick={() => setGoalDraft((current) => ({ ...current, selfLevel: level.value }))}><strong>{level.label}</strong><span>{level.note}</span></button>)}</div></fieldset>
+          <label className="learning-field goal-create-wide"><span>当前基础（可选）</span><input value={goalDraft.background} onChange={(event) => setGoalDraft((current) => ({ ...current, background: event.target.value }))} maxLength={500} placeholder="例如：会基础 TypeScript，但没有独立做过 Agent" /></label>
+          <label className="learning-field"><span>每周投入</span><input type="number" value={goalDraft.weeklyHours} min={1} max={40} step={1} onChange={(event) => setGoalDraft((current) => ({ ...current, weeklyHours: Number(event.target.value) }))} /><small>1–40 小时</small></label>
+        </div>
+        <div className="goal-course-note goal-budget-note"><Timer size={14} /><span>{goalDraft.targetDate ? <>还剩 <strong>{plannedWeeks}</strong> 周 · 按每周 {goalDraft.weeklyHours} 小时算，到期前大约有 <strong>{plannedHours}</strong> 小时可投入。</> : <>没有设定目标日期，暂时无法估算可投入的总工时。</>}</span></div>
+        <div className="goal-course-note"><Sparkles size={14} /><span>先生成完整路线，但只生成第一节正文；通过导师考核后再生成下一节。</span></div>
+        <div className="quick-log-actions"><span>{goalDraft.selfLevel && goalDraft.selfLevel !== "beginner" ? "创建后先进入初始诊断" : "创建后进入首节课程"}</span><button className="primary-button" disabled={!goalDraft.title.trim() || !goalDraft.selfLevel} onClick={() => void submitGoal()}>创建目标并开始<ArrowUpRight size={15} /></button></div>
+      </section>}
+    </div>}
+
+    {goalToDelete && <div className="quick-log-overlay goal-delete-overlay" role="dialog" aria-modal="true" aria-label="删除长期目标">
+      <button className="quick-log-backdrop" aria-label="取消删除" disabled={isDeletingGoal} onClick={() => setGoalToDelete(null)} />
+      <section className="quick-log-dialog goal-delete-dialog" aria-busy={isDeletingGoal}>
+        <div className="goal-delete-icon"><Trash2 size={18} /></div>
+        <div><span className="eyebrow">DELETE GOAL</span><h2>删除「{goalToDelete.title}」？</h2><p>能力地图、初始诊断、课程、课节和关联的今日任务会同步删除；已经留下的学习记录仍会保留。</p></div>
+        <div className="goal-delete-warning">此操作无法撤销。</div>
+        <div className="goal-delete-actions"><button className="quiet-button" disabled={isDeletingGoal} onClick={() => setGoalToDelete(null)}>取消</button><button className="danger-button" disabled={isDeletingGoal} onClick={() => void confirmDeleteGoal()}>{isDeletingGoal ? "正在删除" : "确认删除"}<Trash2 size={14} /></button></div>
+      </section>
+    </div>}
   </div>;
 }
 
@@ -743,17 +1189,15 @@ function evidenceLabel(evidence: "输入" | "输入 + 输出" | "应用") {
   return "行动记录";
 }
 
-function RecordsPanel({ dashboard, logs, input, setInput, inputRef, onSubmit, onGenerateQuiz, onBackToToday }: { dashboard: DemoSeed; logs: LogEntry[]; input: string; setInput: React.Dispatch<React.SetStateAction<string>>; inputRef: React.RefObject<HTMLTextAreaElement | null>; onSubmit: () => void; onGenerateQuiz: (log: LogEntry) => void; onBackToToday: () => void }) {
-  const totalXp = dashboard.learningLogs.reduce((total, log) => total + log.xp, 0) + logs.reduce((total, log) => total + log.xp, 0);
+function RecordsPanel({ dashboard, logs, onOpenQuickLog, onGenerateQuiz }: { dashboard: DemoSeed; logs: LogEntry[]; onOpenQuickLog: () => void; onGenerateQuiz: (log: LogEntry) => void }) {
   return <div className="workspace-page">
-    <WorkspaceHeader eyebrow="EVIDENCE LOG" title="成长记录" description="把今天发生的事放在同一条可回看的时间线上，晚报时再统一回顾。" onBackToToday={onBackToToday} />
-    <div className="records-layout">
-      <section className="panel records-main"><div className="panel-heading"><div><span className="eyebrow">RECENT ACTIVITY</span><h2>最近发生了什么</h2></div><span className="count-badge">{dashboard.learningLogs.length + logs.length} 条记录</span></div><div className="record-list">
+    <section className="panel records-main records-simple"><div className="panel-heading"><div><span className="eyebrow">TODAY</span><h2>今天</h2></div><div className="home-section-actions"><span className="count-badge">{logs.length} 条记录</span><button className="quick-note-button" onClick={onOpenQuickLog}><Plus size={14} /> 随手一记</button></div></div><div className="record-list">
         {logs.map((log) => <article className="record-item record-item-live" key={log.id}><div className="record-date"><strong>{log.createdAt}</strong><span>新增</span></div><div className="record-marker"><span /></div><div className="record-body"><div className="record-topline"><h3>{log.topic}</h3><span className="record-reward">+{log.xp} XP · +{log.coin} coin</span></div><p>{log.text}</p><div className="record-tags">{log.kind && <span className={`record-kind-tag kind-${log.kind}`}>{taskKindLabel(log.kind)}</span>}<span>{log.intent === "plan_today" ? "计划" : log.intent === "review" ? "复盘" : log.output ? "已整理" : "已记录"}</span><span>{log.output ? `AI 摘要：${log.output}` : log.mode === "pending" ? "AI 正在整理" : "等待晚报回顾"}</span>{typeof log.quizScore === "number" && <span>理解 {log.quizScore} 分</span>}</div>{log.output && <button className="record-quiz-button" onClick={() => onGenerateQuiz(log)}>再测一次 <ChevronRight size={13} /></button>}</div></article>)}
-        {dashboard.learningLogs.map((log) => <article className="record-item" key={log.id}><div className="record-date"><strong>{log.occurredAt.split(" ")[0]}</strong><span>{log.occurredAt.split(" ").slice(1).join(" ")}</span></div><div className="record-marker"><span /></div><div className="record-body"><div className="record-topline"><h3>{log.topic}</h3><span className="record-reward">+{log.xp} XP · +{log.coin} coin</span></div><p>{log.summary}</p><div className="record-tags"><span>{evidenceLabel(log.evidence)}</span><span>{log.duration}</span></div></div></article>)}
+        {logs.length === 0 && <div className="records-empty"><strong>今天还没有记录</strong><p>有想法时点“随手一记”，晚上再统一整理。</p></div>}
       </div></section>
-      <aside className="records-side"><section className="panel quick-record-panel"><div className="panel-heading"><div><span className="eyebrow">QUICK NOTE</span><h2>随手记一笔</h2></div><BookOpen size={18} className="panel-icon" /></div><p className="panel-desc">记录任何今天发生的事，不用先分类或整理。晚报时 AI 会把几条记录合在一起统一提问。</p><div className="input-label">今天发生了什么？ <span>学习、运动、生活、休息都可以</span></div><div className="log-input-wrap"><textarea ref={inputRef} value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：读了行动设计的一节内容，下午走了 20 分钟……" rows={6} /></div><div className="input-actions"><span>{input.length}/480</span><button className="send-button" onClick={onSubmit} disabled={!input.trim()}>保存记录 <ArrowUpRight size={15} /></button></div><div className="record-total"><span>本组已获得</span><strong>{totalXp} XP</strong></div></section><section className="panel ledger-panel"><div className="panel-heading"><div><span className="eyebrow">LEDGER</span><h2>最近结算</h2></div><ReceiptText size={18} className="panel-icon" /></div><div className="ledger-list">{dashboard.ledger.map((entry) => <div className="ledger-item" key={entry.id}><div className={`ledger-icon ${entry.account === "XP" ? "ledger-xp" : "ledger-coin"}`}>{entry.account === "XP" ? <Sparkles size={14} /> : <WalletCards size={14} />}</div><div><strong>{entry.reason}</strong><span>{entry.occurredAt}</span></div><em>{entry.amount >= 0 ? "+" : ""}{entry.amount} {entry.account}</em></div>)}</div></section></aside>
-    </div>
+    <details className="panel records-history"><summary><span><span className="eyebrow">EARLIER</span><strong>更早的记录</strong></span><span>{dashboard.learningLogs.length} 条 <ChevronRight size={14} /></span></summary><div className="record-list">
+      {dashboard.learningLogs.map((log) => <article className="record-item" key={log.id}><div className="record-date"><strong>{log.occurredAt.split(" ")[0]}</strong><span>{log.occurredAt.split(" ").slice(1).join(" ")}</span></div><div className="record-marker"><span /></div><div className="record-body"><div className="record-topline"><h3>{log.topic}</h3><span className="record-reward">+{log.xp} XP · +{log.coin} coin</span></div><p>{log.summary}</p><div className="record-tags"><span>{evidenceLabel(log.evidence)}</span><span>{log.duration}</span></div></div></article>)}
+    </div></details>
   </div>;
 }
 
@@ -773,13 +1217,12 @@ function LearningQuizCard({ quiz, answers, grade, busy, error, onAnswer, onGrade
   return <section className="quiz-panel"><div className="quiz-panel-header"><div><span className="eyebrow">RECALL CHECK · {quiz.mode === "llm" ? "LLM 出题" : "演示出题"}</span><h2>理解「{quiz.topic}」</h2><p>先别查资料，直接回答，并尽量给一个例子。LLM 会按概念、迁移和表达结构评分。</p></div><div className="quiz-status"><Brain size={18} /><span>{answeredCount}/{quiz.questions.length} 已回答</span></div></div><div className="quiz-source"><span>学习底稿</span><p>{quiz.sourceSummary}</p></div><div className="quiz-question-list">{quiz.questions.map((question, index) => <div className="quiz-question" key={question.id}><div className="quiz-question-top"><span>0{index + 1}</span><strong>{question.prompt}</strong></div><p className="quiz-hint">提示：{question.hint}</p><textarea value={answers[question.id] || ""} onChange={(event) => onAnswer(question.id, event.target.value)} placeholder="写下你的理解，至少给一个具体例子……" rows={3} disabled={Boolean(grade)} /></div>)}</div>{error && <p className="quiz-error" role="alert">{error}</p>}{grade ? <div className="quiz-result"><div className="quiz-result-score"><strong>{grade.score}</strong><span>分</span><em>{grade.level}</em></div><div className="quiz-result-copy"><p>{grade.summary}</p><span>{grade.nextHabit}</span></div></div> : <button className="primary-button quiz-submit" onClick={onGrade} disabled={busy || answeredCount === 0}>{busy ? "LLM 正在评分…" : `提交答案并评分 · ${answeredCount}/${quiz.questions.length}` } <ArrowUpRight size={15} /></button>}{grade && <div className="quiz-feedback-list">{grade.feedback.map((item) => <div className="quiz-feedback" key={item.questionId}><div><strong>第 {quiz.questions.findIndex((question) => question.id === item.questionId) + 1} 题 · {item.score} 分</strong><p>{item.comment}</p></div><span>{item.modelAnswer}</span></div>)}</div>}{grade && <div className="quiz-graded-by"><span>{grade.gradedBy === "llm" ? "LLM 已完成逐题评分" : `LLM 暂时不可用，已使用${grade.provider === "rules" ? "规则" : grade.provider}估分`}</span><button className="quiet-button" onClick={onReset}><RotateCcw size={14} /> 再做一次</button></div>}</section>;
 }
 
-function GrowthPanel({ dashboard, onBackToToday }: { dashboard: DemoSeed; onBackToToday: () => void }) {
+function GrowthPanel({ dashboard }: { dashboard: DemoSeed }) {
   const totalMinutes = dashboard.weeklyBars.reduce((total, bar) => total + Number.parseInt(bar.label, 10), 0);
   const applicationCount = dashboard.learningLogs.filter((log) => log.evidence === "应用").length;
   const understandingCount = dashboard.learningLogs.filter((log) => log.evidence === "输入 + 输出").length;
   return <div className="workspace-page">
-    <WorkspaceHeader eyebrow="GROWTH DASHBOARD" title="成长仪表盘" description="不把自己压缩成一个分数，只看节奏、证据和下一轮实验。" onBackToToday={onBackToToday} />
-    <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{dashboard.user.streak}<small> 天</small></strong><p>连续完成有效学习行动</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>记录之后形成了理解</p></article><article className="metric-card metric-paper"><span className="metric-label">成长等级</span><strong>Lv.{String(dashboard.user.level).padStart(2, "0")}</strong><p>{dashboard.user.role} · 从可验证行动开始</p></article></div>
+    <div className="growth-metrics"><article className="metric-card metric-coral"><span className="metric-label">有效行动日</span><strong>{dashboard.user.streak}<small> 天</small></strong><p>连续完成有效学习行动</p></article><article className="metric-card metric-navy"><span className="metric-label">本周投入</span><strong>{Math.floor(totalMinutes / 60)}<small>h</small> {totalMinutes % 60}<small>m</small></strong><p>7 天累计专注时长</p></article><article className="metric-card metric-sage"><span className="metric-label">掌握证据</span><strong>{applicationCount + understandingCount}<small> 条</small></strong><p>回答合格并形成理解</p></article></div>
     <div className="growth-layout"><section className="panel growth-chart-panel"><div className="panel-heading"><div><span className="eyebrow">RHYTHM TREND</span><h2>近 7 天投入节奏</h2></div><span className="trend-chip"><ArrowUpRight size={13} /> 本周数据</span></div><div className="growth-chart">{dashboard.weeklyBars.map((bar, index) => <div className="growth-bar-column" key={bar.day}><span className="growth-bar-value">{bar.label}</span><div className="growth-bar-track"><span className={index === 6 ? "highlight" : ""} style={{ height: `${bar.value}%` }} /></div><span>{bar.day}</span></div>)}</div><div className="chart-caption"><span><i className="legend-dot" /> 有效专注时长</span><strong>累计：{Math.floor(totalMinutes / 60)}h {totalMinutes % 60}m</strong></div></section><section className="panel evidence-panel"><div className="panel-heading"><div><span className="eyebrow">EVIDENCE MIX</span><h2>进步由什么组成</h2></div><BarChart3 size={18} className="panel-icon" /></div><div className="evidence-row"><div className="evidence-label"><span>行动记录</span><strong>{dashboard.learningLogs.length} 条</strong></div><div className="evidence-track"><span style={{ width: `${Math.min(100, dashboard.learningLogs.length * 12)}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>理解回应</span><strong>{understandingCount} 条</strong></div><div className="evidence-track"><span className="evidence-green" style={{ width: `${Math.min(100, understandingCount * 18)}%` }} /></div></div><div className="evidence-row"><div className="evidence-label"><span>实际应用</span><strong>{applicationCount} 条</strong></div><div className="evidence-track"><span className="evidence-gold" style={{ width: `${Math.min(100, applicationCount * 24)}%` }} /></div><p className="evidence-note"><Sparkles size={13} /> {dashboard.insight}</p></div></section></div>
     <section className="panel goal-progress-panel"><div className="panel-heading"><div><span className="eyebrow">GOAL PROGRESS</span><h2>目标的真实进度</h2></div><span className="count-badge">只比较自己的基线</span></div><div className="growth-goal-list">{dashboard.goals.map((goal) => <div className="growth-goal" key={goal.id}><div className="growth-goal-heading"><div><strong>{goal.title}</strong><span>{goal.description}</span></div><em>{goal.progress}%</em></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="growth-goal-footer"><span>{goal.horizon}</span><span>{goal.status}</span></div></div>)}</div></section>
   </div>;

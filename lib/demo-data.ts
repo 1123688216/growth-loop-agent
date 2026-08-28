@@ -10,6 +10,9 @@ export type Task = {
   coin: number;
   status: "done" | "current" | "upcoming";
   kind: TaskKind;
+  /** 由 task_lesson_links 关联的课程章节，课程任务才有。 */
+  lessonId?: string;
+  programId?: string;
 };
 
 export type LearningLog = {
@@ -28,8 +31,14 @@ export type Goal = {
   title: string;
   description: string;
   progress: number;
+  /** 展示用的周期文案，由 targetDate 派生。 */
   horizon: string;
+  /** ISO 日期（YYYY-MM-DD）；缺省表示不设期限。 */
+  targetDate?: string;
   status: "进行中" | "待复盘";
+  selfLevel?: "beginner" | "familiar" | "intermediate";
+  diagnosticStatus?: "skipped" | "pending" | "in_progress" | "completed" | "failed";
+  learningProgramId?: string;
 };
 
 export type LedgerEntry = {
