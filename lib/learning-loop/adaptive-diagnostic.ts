@@ -175,7 +175,7 @@ export async function answerAdaptiveDiagnostic(input: {
   });
 
   await report(input.reporter, { stage: "course", percent: 68, message: "能力基线已确定，正在生成课程骨架和首课" });
-  const program = await generateCourseForGoal(input.userId, found.assessment.goalId, 5, async (progress) => {
+  const program = await generateCourseForGoal(input.userId, found.assessment.goalId, undefined, async (progress) => {
     await report(input.reporter, {
       stage: "course",
       percent: Math.min(98, 68 + Math.round(progress.percent * .3)),

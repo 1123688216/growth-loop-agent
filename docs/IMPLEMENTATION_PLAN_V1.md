@@ -1,221 +1,847 @@
-# Growth Loop V1 实施方案
+# Growth Loop V1 实施方案（教学质量优先修订版）
 
-## 1. V1 要验证的闭环
+> 修订日期：2026-08-30
+>
+> 当前状态：V0.4.3 的工程 MVP 与基础课件阅读器已完成，已经具备结构化课程、质量门禁、定向修复、内容版本、题目追溯和分页阅读；V0.4.4 私有资料 RAG 已完成设计冻结但尚未修改业务代码。
+> 相关文档：[V0.4.2 当前实现基线](IMPLEMENTATION_PLAN_V042.md)、[V0.4.3 详细实施方案](IMPLEMENTATION_PLAN_V043.md)、[V0.4.4 详细实施方案](IMPLEMENTATION_PLAN_V044.md)、[Agent 角色与信息边界](AGENT_ROLES.md)、[开发者手册](DEVELOPER_HANDBOOK.md)。
 
-V1 不追求“Agent 数量”，只验证系统能否根据用户真实水平持续安排下一步：
+## 1. V1 的产品目标没有变化
+
+V1 要验证的不是 Agent 数量，也不是是否使用了某个框架，而是系统能否依据用户的真实学习证据持续安排下一步：
 
 ```text
-创建目标 → 自评层级 → 可选诊断 → 能力基线 → 课程路线
-→ 每日课程任务 → 课后考核 → 更新掌握度 → 调整后续任务
+创建目标
+→ 识别需要掌握的能力
+→ 建立初始能力基线
+→ 生成有依据、有教学价值的课程
+→ 用户学习并提交可观察证据
+→ 形成性考核
+→ 更新能力画像
+→ 调整后续课程和任务
+→ 阶段性独立考核
+→ 达标后进入下一阶段或完成目标
 ```
 
-创建目标时增加三档自评：
+V0.4.2 已经证明这条链路在工程上能够闭合，但当前课程正文仍然过薄，不能稳定承担“学习”这一核心环节。V1 接下来的首要目标不是增加更多考核，而是先保证用户确实获得了足以被考核的教学内容。
 
-| 页面文案 | 数据值 | 初始处理 |
+### 1.1 当前最重要的产品原则
+
+```text
+没有合格教学内容
+→ 就没有公平的课后考核
+→ 更不能产生可信的掌握度和阶段通过结论
+```
+
+因此 V1 增加一条不可绕过的顺序约束：
+
+```text
+知识来源可用
+→ 课程内容通过质量门禁
+→ 才允许生成正式课后题
+→ 课后形成性证据充分
+→ 才允许进入阶段考核
+```
+
+## 2. 当前实现与已确认问题
+
+### 2.1 V0.4.2 已完成的能力
+
+- 创建目标时选择 `beginner / familiar / intermediate`；
+- Planner 拆分 `goal_skills`；
+- `familiar / intermediate` 进入逐题自适应初始诊断；
+- 初始诊断逐题评分、升降难度并保存证据；
+- 诊断完成后初始化 `skill_mastery`；
+- Planner 生成课程骨架，Tutor 生成第一节正文和三道形成性题目；
+- 用户答题后更新掌握度、课节状态和关联任务；
+- 通过后按最新证据调整并生成下一课；
+- SQLite 支持刷新恢复、幂等提交和多目标课程切换；
+- 数据库当前为 V7，已包含课程内容版本、质量报告、教学块来源骨架和学习作息；V0.4.4 将使用 Schema V8 写入真实资料、片段和检索快照。
+
+完整现状以 [V0.4.2 当前实现基线](IMPLEMENTATION_PLAN_V042.md) 为准。
+
+### 2.2 V0.4.3 立项时的教学质量基线（历史问题）
+
+以下问题用于解释 V0.4.3 为什么立项，当前结构化课程、质量门禁和动态课时已经修复其中的核心工程缺口；不能再把这段历史基线描述成当前实现。
+
+当前课程质量低主要来自以下确定事实：
+
+1. `buildCourseOutline` 将课程限制在 3–5 节，正常路径固定生成 5 节；目标周期和每周投入没有真正决定课程容量。
+2. 单课内容只有 `opening / explanation / example / practice / deliverable / concepts` 几个字符串，没有分段教学结构。
+3. Tutor 输入主要是目标标题、能力一句话描述、章节骨架和掌握度数字，没有可靠资料、诊断错因、前置依赖和充分上下文。
+4. 模型调用失败时会静默落到通用模板，用户无法知道当前看到的是 LLM 正文还是规则占位。
+5. 即使 LLM 调用成功，当前 Prompt 也倾向输出约百字讲解，而不是完整教学单元。
+6. 课程没有来源引用、内容覆盖校验、具体性校验和教学质量门禁。
+
+最近一次本地 Java 目标中，Planner 使用 LLM 成功生成骨架，但 Tutor 正文和课后题均回退到本地规则；第一课讲解约 135 个字符、示例约 43 个字符。这证明当前系统完成的是“课程记录生成”，还不是“高质量教学内容生成”。
+
+### 2.3 当前结论
+
+```text
+工程闭环：已完成
+教学内容引擎：原型级
+正式阶段考核：不应现在推进
+```
+
+阶段考核、模拟面试和毕业门禁必须等待课程质量与来源链建立后再开发，否则系统只是在精确评估一段没有充分教学价值的内容。
+
+## 3. 通用学习 Agent，而不是代码课程生成器
+
+产品面向通用学习，编程只是第一套深入实现和验证的领域。课程不按“编程/英语/历史”写死，而是先判断每个能力需要怎样学习。
+
+### 3.1 通用能力类型
+
+```ts
+type CapabilityType =
+  | "conceptual_understanding"
+  | "procedural_skill"
+  | "problem_solving"
+  | "expression_communication"
+  | "retrieval_discrimination"
+  | "integrated_creation";
+```
+
+| 能力类型 | 常见领域 | 合适的教学方法 |
 |---|---|---|
-| 初学者 | `beginner` | 跳过诊断，`confidence = 0` 表示暂无证据，课程从基础概念开始；第一次课后小测直接形成首个掌握度估计 |
-| 一知半解 | `familiar` | 生成约 5 道诊断题，概念与解释题为主，包含少量应用题 |
-| 小有所成 | `intermediate` | 生成约 8 道诊断题，以应用、调试和设计题为主 |
+| 概念理解 | 历史、经济学、计算机原理 | 解释、概念关系、对比、案例 |
+| 操作流程 | Git、软件操作、摄影、实验 | 示范、步骤、模仿、错误排查 |
+| 问题求解 | 数学、算法、物理、逻辑 | worked example、脚手架练习、变式题 |
+| 表达与交流 | 外语、写作、演讲、面试 | 范例、模仿、输出、反馈、重写 |
+| 记忆与辨析 | 考证、术语、规则条款 | 提取练习、间隔复习、辨析题 |
+| 综合创作 | 编程项目、论文、设计作品 | 里程碑、成果提交、rubric 评估 |
 
-自评只决定诊断入口，不直接作为能力分数。最终基线由诊断结果决定。
+一个能力可以同时包含多种类型。例如 Java 并发可以是“概念理解 + 问题求解 + 综合创作”，英语面试可以是“表达交流 + 记忆辨析”。
 
-## 2. LLM 生成题库的边界
+### 3.2 通用领域策略
 
-题目可以由 LLM 生成，但不能每次打开页面临时生成、答题时再次生成。正确流程是：
+V1 不为每个学科复制一套 Agent，而是保留通用内核并使用领域策略：
 
-1. 规划师先把目标拆成 `goal_skills`。
-2. 出题 Agent 根据能力、目标层级、难度和题型生成结构化题目。
-3. 服务端进行数量、字段、难度分布、重复度和能力覆盖校验。
-4. 将题目、参考答案和评分 rubric 固化到 `diagnostic_questions`。
-5. 用户提交答案后，考核 Agent 只能读取这份固定快照进行评分。
-6. 每次答案和评分结果写入 `diagnostic_attempts`，不能覆盖历史尝试。
+```text
+通用学习内核
+├─ 能力类型分类
+├─ 教学内容块
+├─ 来源与引用
+├─ 学习证据
+├─ 形成性评分
+└─ 掌握度更新
 
-建议的结构化输出：
-
-```python
-class DiagnosticQuestion(BaseModel):
-    skill_key: str
-    kind: Literal["concept", "explanation", "application", "debugging", "design"]
-    difficulty: int = Field(ge=1, le=5)
-    prompt: str
-    hint: str
-    reference_answer: str
-    rubric: list[RubricItem]
-    max_score: int = Field(gt=0)
-
-class DiagnosticSet(BaseModel):
-    questions: list[DiagnosticQuestion]
-    coverage_notes: list[str]
+领域策略
+├─ software_development（首个完整实现）
+├─ language_learning（后续）
+├─ exam_preparation（后续）
+├─ academic_learning（后续）
+└─ creative_skill（后续）
 ```
 
-LLM 题库适合个性化诊断，但它不是天然可靠的知识库。后续面试系统应为题目增加来源字段，并优先使用官方文档、可信题库或 RAG 材料生成和校验；没有可靠来源时，题目应明确标记为 `llm`。
+编程策略可以增加代码示例、调试案例、测试与项目交付，但这些字段不能进入所有课程都必须填写的通用顶层结构。
 
-## 3. LangGraph 与 Pydantic AI 的分工
+## 4. 通用课程内容模型
 
-不要同时使用 LangGraph 和 Pydantic Graph。V1 采用以下单一职责：
+### 4.1 课程的三个层级
 
-- LangGraph：共享状态、条件分支、循环、等待用户答题、断点恢复。
-- Pydantic AI Agent：在指定节点中调用模型，并用 `output_type` 返回经过校验的 Pydantic 模型。
-- 普通 Python 函数：图内路由、分支条件、重试选择等不依赖数据库事务的确定性计算。
-- **分数归一化、掌握度、合格阈值和完成门禁由 Next.js 普通函数在写事务内执行**；Python 节点只提交结构化模型证据，见 §4。
-
-目标创建图：
-
-```mermaid
-flowchart TD
-  A[保存目标和自评] --> B[规划师生成能力模型]
-  B --> C{用户自评}
-  C -->|初学者| D[规则初始化能力基线]
-  C -->|一知半解/小有所成| E[考核员生成诊断题]
-  E --> F[持久化题目]
-  F --> G[interrupt: 等待用户答题]
-  G --> H[考核员结构化评分]
-  H --> I[规则更新能力基线]
-  D --> J[规划师生成课程路线]
-  I --> J
-  J --> K[持久化课程和首批任务]
-  K --> L[完成]
+```text
+LearningProgram：完整目标路线和周期
+  └─ CourseModule：一组相互依赖的能力阶段
+       └─ CourseLesson：一次可完成、可练习、可验证的教学单元
 ```
 
-建议的图状态只保存 ID 和小型 JSON，不在 checkpoint 中复制完整课程正文：
+课程周期不能再等同于固定 5 节课。Planner 必须依据：
 
-```python
-class GoalOnboardingState(TypedDict):
-    workflow_run_id: str
-    user_id: str
-    goal_id: str
-    self_level: Literal["beginner", "familiar", "intermediate"]
-    diagnostic_assessment_id: str | None
-    diagnostic_attempt_id: str | None
-    program_id: str | None
-    error_code: str | None
+- 目标日期；
+- 每周投入；
+- 能力数量和依赖；
+- 每项能力估时；
+- 初始诊断结果；
+- 每节合理学习时长；
+
+计算模块、预计课时和每周节奏。数据库可以先保存完整骨架，但仍然只按需生成最近一节正文。
+
+### 4.2 LessonOutline
+
+```ts
+type LessonOutline = {
+  title: string;
+  moduleId: string;
+  primarySkillId: string;
+  capabilityTypes: CapabilityType[];
+  prerequisites: string[];
+  objectives: string[];
+  estimatedMinutes: number;
+  difficulty: 1 | 2 | 3 | 4 | 5;
+  expectedEvidenceTypes: EvidenceType[];
+};
 ```
 
-Pydantic AI 节点输出：
+### 4.3 LearningBlock
 
-| 节点 | Agent | `output_type` |
-|---|---|---|
-| `build_skill_map` | PlannerAgent | `SkillMapOutput` |
-| `generate_diagnostic` | ExaminerAgent | `DiagnosticSet` |
-| `grade_diagnostic` | ExaminerAgent | `DiagnosticGrade` |
-| `generate_program` | PlannerAgent | `LearningProgramOutput` |
-| `generate_lesson_content` | TutorAgent | `LessonContentOutput` |
-| `generate_lesson_check` | TutorAgent | `LessonCheckSetOutput` |
-| `grade_lesson_check` | TutorAgent | `LessonCheckGradeOutput` |
-| `daily_review` | ReviewerAgent | `DailyReviewOutput` |
+单课不再是一段 `explanation`，而是一组可以组合的内容块：
 
-数据库写入不作为 Agent 工具开放。节点拿到结构化输出后，交由 Next.js 的内部接口验证用户归属、状态和幂等键，再执行事务。图状态只持有返回的 ID——这正是上面 `GoalOnboardingState` 只放 ID 不放正文的原因。
+```ts
+type LearningBlock =
+  | ExplanationBlock
+  | ConceptRelationBlock
+  | ComparisonBlock
+  | WorkedExampleBlock
+  | CaseStudyBlock
+  | DemonstrationBlock
+  | CommonMistakeBlock
+  | BoundaryBlock
+  | GuidedPracticeBlock
+  | RetrievalPracticeBlock
+  | ReflectionBlock
+  | SummaryBlock;
+```
 
-## 4. 服务边界
+通用字段示意：
 
-Pydantic AI 和 LangGraph 都运行在 Python 侧；**Next.js 是数据库的唯一写入方**：
+```ts
+type BaseLearningBlock = {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  sourceRefs: SourceReference[];
+  teachesObjectives: string[];
+};
+```
+
+领域扩展示例：
+
+```ts
+type CodeLabBlock = BaseLearningBlock & {
+  type: "code_lab";
+  language: string;
+  starterCode: string;
+  expectedBehavior: string;
+  testCases: string[];
+};
+
+type SpeakingPracticeBlock = BaseLearningBlock & {
+  type: "speaking_practice";
+  prompt: string;
+  targetFeatures: string[];
+};
+```
+
+### 4.4 LessonContentOutput
+
+```ts
+type LessonContentOutput = {
+  lessonId: string;
+  prerequisitesCheck: string[];
+  objectives: string[];
+  blocks: LearningBlock[];
+  guidedPractice: PracticeSpec;
+  independentPractice: PracticeSpec;
+  observableOutcome: EvidenceRequirement;
+  summary: string;
+  nextLessonBridge: string;
+  sourceRefs: SourceReference[];
+};
+```
+
+`observableOutcome` 是通用的“学会了的可观察证据”，不等于代码项目：
+
+- 编程：代码、测试结果、调试说明；
+- 历史：时间线、因果分析；
+- 英语：短文、口语录音；
+- 数学：推导和变式题；
+- 摄影：照片及参数说明；
+- 面试：结构化回答或录音。
+
+### 4.5 EvidenceType
+
+```ts
+type EvidenceType =
+  | "text_answer"
+  | "quiz"
+  | "code"
+  | "file"
+  | "image"
+  | "audio"
+  | "video"
+  | "project"
+  | "interview";
+```
+
+第一阶段只要求完整实现 `text_answer` 和 `code`，但数据契约不得阻塞后续文件、图片、音频和面试证据。
+
+## 5. 教学质量门禁
+
+### 5.1 课程状态必须区分“已生成”和“可教学”
+
+建议扩展课节内容状态：
+
+```text
+planned
+→ retrieving_sources
+→ generating
+→ quality_review
+→ ready
+
+失败分支：
+source_insufficient / quality_failed / generation_failed
+```
+
+只有 `ready` 的课程才允许用户开始正式学习并生成计入掌握度的课后考核。
+
+### 5.2 最低质量要求
+
+一节正式课程至少必须满足：
+
+1. 聚焦少量明确目标，而不是堆叠多个名词；
+2. 每个目标都有对应教学内容块；
+3. 包含具体解释或示范，不能只给学习建议；
+4. 至少包含一个完整 worked example、案例或操作示范；
+5. 包含常见误区、失败表现或适用边界；
+6. 练习必须能够由本课内容支持；
+7. 学习证据和成功标准必须可观察；
+8. 内容必须绑定可靠来源，或明确标记为未验证的 LLM 通用知识；
+9. 不得出现“请自己找一个场景”“写一份结论、依据、步骤”之类与主题无关的通用占位；
+10. 模型或来源失败时不得静默把模板当成正式课程。
+
+字数只能作为异常检测信号，不能单独代表质量。质量门禁需要同时检查结构完整性、目标覆盖、具体性、来源覆盖和练习对齐。
+
+### 5.3 LessonQualityReport
+
+```ts
+type LessonQualityReport = {
+  passed: boolean;
+  objectiveCoverage: number;
+  sourceCoverage: number;
+  specificityScore: number;
+  practiceAlignment: number;
+  genericPatternHits: string[];
+  missingBlocks: string[];
+  reasons: string[];
+};
+```
+
+第一版由确定性规则完成硬门禁，LLM 只负责补充语义审查；不能让生成课程的同一次模型调用直接自行宣布通过。
+
+### 5.4 回退必须可见
+
+课程页面和 Agent 运行记录必须把生成方式、来源状态和教学质量分开记录：
+
+- 生成方式：`llm / rules / mixed / manual`；
+- 来源状态：`unverified / partially_grounded / grounded`；
+- 教学质量：`pending / passed / failed`。
+
+`rag_grounded` 不作为生成方式：有来源只说明内容可追溯，不能说明由谁生成，也不能自动证明教学质量通过。
+
+如果 Tutor 失败，页面应显示“课程生成失败/内容质量未通过，可以重试”，不能继续展示一段通用模板并让用户参加正式考核。
+
+## 6. 知识来源与 RAG
+
+RAG 解决“教什么、依据是什么”；课程内容模型解决“怎么教、怎么练、怎么确认学会”。二者缺一不可。
+
+### 6.1 来源优先级
+
+```text
+用户上传资料
+→ 用户指定网页
+→ 官方文档/标准/论文
+→ 可信第三方资料
+→ 公开网络补充
+→ LLM 通用知识回退
+```
+
+用户可以为目标设置：
+
+```ts
+type SourcePolicy =
+  | "private_only"
+  | "private_first"
+  | "official_web"
+  | "open_web";
+```
+
+V0.4.4 核心版固定使用 `private_only`，资料不足时提示用户补充资料，不自动联网。`private_first / official_web / open_web` 只有在后续子版本提供明确联网开关、抓取快照和来源质量门禁后才启用。
+
+### 6.2 分阶段输入范围
+
+V0.4.4 核心版支持：
+
+- PDF；
+- Word（DOCX）；
+- TXT；
+- 用户直接粘贴文本；
+
+后续再支持：
+
+- V0.4.4.2：用户指定 URL；
+- V0.4.4.3：由系统发起的官方来源定向搜索；
+- 开放网络搜索继续保持显式可选，不作为默认来源。
+
+扫描版 PDF 在没有 OCR 时必须标记为 `ocr_required`，不能把空文本当成解析成功。
+
+### 6.3 处理链路
+
+```text
+上传/抓取
+→ 文件安全与类型检查
+→ 文本提取
+→ 章节、页码和段落保留
+→ 清洗与去重
+→ 分块
+→ FTS5 关键词索引（V0.4.4）
+→ Embedding 语义索引（V0.4.4.1）
+→ 按 userId / goalId / 文档版本过滤
+→ 混合检索（V0.4.4.1）
+→ 来源质量筛选
+→ 生成课程或题目
+→ 固化引用快照
+```
+
+### 6.4 来源快照原则
+
+课程和题目生成时必须保存实际使用的 `sourceChunkIds`。评分时不能重新联网搜索或重新检索后改变标准，而应读取生成时的固定快照：
+
+```text
+来源片段快照
+→ 教学内容
+→ 题目
+→ 参考答案
+→ rubric
+→ 用户答案
+→ 评分证据
+```
+
+用户更新或删除原始资料时，已发生的课程与考核记录仍保留当时的证据快照；新课程使用新版本来源。
+
+### 6.5 联网搜索不是搜索摘要直喂模型
+
+正确流程：
+
+```text
+判断本地证据不足
+→ 生成检索查询
+→ 搜索结果召回
+→ 筛选可信页面
+→ 抓取正文
+→ 保存 URL、时间、哈希和正文快照
+→ 分块进入统一来源库
+→ 再参与课程和题目生成
+```
+
+搜索结果必须经过域名、来源类型、发布日期、内容可访问性、冲突和提示词注入检查。社区问答和个人博客可以补充，但不得作为高风险结论或正式考核答案的唯一依据。
+
+## 7. Agent 职责与信息边界
+
+### 7.1 PlannerAgent
+
+负责：
+
+- 将目标拆分为能力和依赖；
+- 为每项能力标注 `CapabilityType[]`；
+- 根据目标日期、投入和能力估时生成模块与课时骨架；
+- 选择每节预期学习证据；
+- 在长期证据变化较大时重排尚未生成的课程。
+
+不负责：
+
+- 编写完整课文；
+- 直接评分；
+- 修改掌握度；
+- 自行完成数据库权威写入。
+
+### 7.2 TutorAgent
+
+负责：
+
+- 根据当前能力、诊断证据、来源片段和教学策略生成单课内容；
+- 生成与实际教学内容一致的形成性练习；
+- 对课后答案给出反馈和补充讲解；
+- 生成不合格后的针对性重学材料。
+
+不负责：
+
+- 阶段通过或毕业结论；
+- 改写已经固化的题目 rubric；
+- 在内容质量失败时强行推进课程。
+
+### 7.3 ExaminerAgent
+
+初始诊断和后续独立考核由同一个 Examiner Agent 负责，不拆成新的“诊断 Agent”。它拥有不同操作：
+
+```text
+initial_diagnostic
+milestone_exam
+mock_interview
+graduation_assessment
+```
+
+初始诊断用于寻找学习起点，可以自适应升降难度；阶段考核用于验证是否达到固定标准，不能因为用户答错就不断降低通过标准。
+
+Examiner 不读取完整导师日常对话，只读取目标能力、正式考核蓝图、题目快照、答案和最小必要证据，以保持独立性。
+
+### 7.4 LearningPolicy
+
+LearningPolicy 是确定性业务规则，不是 Agent。它负责：
+
+- 归一化得分；
+- 更新掌握度与置信度；
+- 选择下一课难度；
+- 判断是否补课、复测或进入阶段考核；
+- 执行任务完成门禁。
+
+这些权威状态仍由 Next.js 在数据库事务内写入，不能交给 LLM 直接修改。
+
+## 8. 教学和考核的顺序
+
+### 8.1 初始诊断
+
+初始诊断发生在课程前，用于决定起点。当前 V0.4.2 的逐题自适应实现继续保留，不因为课程引擎改造而重写。
+
+### 8.2 形成性考核
+
+形成性考核由 Tutor 负责，前置条件是：
+
+```text
+lesson.generation_status = ready
+AND lesson_quality_report.passed = true
+```
+
+题目必须逐项绑定：
+
+- 本课目标；
+- 实际教学块；
+- 固定参考答案；
+- rubric；
+- 来源快照；
+- 预期证据类型。
+
+### 8.3 阶段考核
+
+阶段考核暂不开发，直到满足：
+
+1. 该阶段所有必修能力都有合格教学内容；
+2. 每项能力至少有规定数量的形成性证据；
+3. 来源覆盖达到门槛；
+4. 不存在未处理的 `quality_failed` 课程；
+5. Examiner 考核蓝图和通用考核数据结构确定。
+
+阶段考核由 Examiner 负责，属于总结性证据；Tutor 的高分不能直接作为阶段通过或毕业证明。
+
+### 8.4 不合格分支
+
+```text
+课后考核不合格
+→ 定位未满足的 rubric 和能力点
+→ Tutor 生成针对性补充讲解
+→ 生成新的变式练习
+→ 用户重新提交
+→ 保存新的 attempt，不覆盖历史
+```
+
+V0.4.3 先为该分支预留数据契约；完整循环在课程内容引擎稳定后实现。
+
+## 9. 数据结构演进
+
+### 9.1 当前数据库
+
+当前 `DATABASE_SCHEMA_VERSION = 5`，已包含：
+
+- `goal_learning_profiles`；
+- `goal_skills` / `skill_mastery`；
+- `learning_programs` / `course_modules` / `course_lessons`；
+- `task_lesson_links`；
+- `diagnostic_assessments` / `diagnostic_questions` / `diagnostic_responses` / `diagnostic_attempts`；
+- `lesson_assessment_attempts`；
+- `workflow_runs` / `agent_runs`。
+
+### 9.2 V0.4.3 预计增加
+
+课程内容块可以先作为版本化 JSON 保存，必须查询和统计的质量状态使用普通字段。
+
+建议增加：
+
+```text
+lesson_content_versions
+lesson_quality_reports
+lesson_block_sources
+```
+
+关键字段：
+
+- 内容版本；
+- 生成模式；
+- Prompt/策略版本；
+- 质量状态和质量分项；
+- 失败原因；
+- 当前正式版本；
+- 与目标、课节、能力和来源的关联。
+
+### 9.3 V0.4.4 预计增加
+
+```text
+knowledge_sources
+source_versions
+source_chunks
+source_chunks_fts
+goal_source_links
+retrieval_runs
+retrieval_run_items
+question_source_links
+```
+
+其中来源必须包含：用户归属、目标关系、来源类型、原始文件名、不可变内容哈希、版本、解析状态、可信等级和时间。课程继续复用 `lesson_block_sources`，但 `source_ref` 必须指向真实 chunk 并保存非空快照哈希，不能把课节全部来源复制给每个教学块。详细契约见 [V0.4.4 实施方案](IMPLEMENTATION_PLAN_V044.md)。
+
+### 9.4 Examiner 通用考核结构
+
+当前 `diagnostic_*` 继续服务初始诊断。真正开发阶段考核时，再迁移或泛化为：
+
+```text
+assessments
+assessment_questions
+assessment_responses
+assessment_results
+```
+
+并使用：
+
+```ts
+type AssessmentType =
+  | "initial_diagnostic"
+  | "milestone_exam"
+  | "mock_interview"
+  | "graduation_exam";
+```
+
+现在不为未来表名重构已稳定工作的初始诊断。
+
+## 10. LangGraph 与 Pydantic AI 的目标分工
+
+目标架构不变，只调整接入顺序。
+
+- LangGraph：共享状态、条件分支、循环、等待用户输入、断点恢复和 checkpoint。
+- Pydantic AI Agent：节点内模型调用、依赖注入和结构化 `output_type`。
+- 普通 Python 函数：确定性路由、重试选择和不需要数据库事务的计算。
+- Next.js：页面、认证、业务 API、数据库唯一权威写入方和事务门禁。
 
 ```text
 Next.js
-├── 页面、登录、会话
-├── SQLite 业务数据的唯一写入方
-├── /api/goals、/api/tasks 等对外接口
-├── /api/internal/* 供 Python 回调的落库接口（内部服务密钥）
-└── 调用 Python workflow service
+├─ UI、登录与外部 API
+├─ SQLite/PostgreSQL 业务数据唯一写入方
+├─ 所有权、幂等和事务校验
+└─ 调用 Python workflow service
 
 Python FastAPI
-├── LangGraph 工作流（状态、分支、interrupt、checkpoint）
-├── Pydantic AI Agents（节点内调用模型，output_type 校验）
-├── 图内确定性路由（分支、重试选择）
-├── /workflows/goal-onboarding/start
-├── /workflows/{run_id}/resume
-└── /workflows/{run_id}
+├─ LangGraph 工作流
+├─ Pydantic AI Agents
+├─ 文档解析、Embedding 和检索计算
+└─ 返回结构化结果，不直接修改业务权威状态
 ```
 
-### 为什么落库留在 Next.js
+暂缓框架迁移的理由：当前 Node 工作流已经能够运行，迁移不会自动提升课程质量。先稳定课程契约、来源契约和质量门禁，再迁移这些已验证节点，可以避免把错误的数据形状固化到 Python 服务。
 
-这是 2026-08-27 定下的边界，两个方案在图的形状、节点划分、Agent 定义和 interrupt 位置上完全相同，差别只在每个节点里落库那一行是发内部 HTTP 还是直接执行 SQL。选择前者的理由：
+迁移时必须保留：
 
-1. `lib/db/` 已经承载了事务、归属校验和 V0.4.1 建立的快照边界，用 Python 重写一遍等于维护两份 schema 认知，漂移是迟早的事。
-2. 登录会话必须留在 Next.js（Cookie 与中间件要读写 `sessions`）。若 Python 也写库，就是两个进程写同一个 SQLite，写锁和双份维护都要管。
-3. 图状态本来就只持有 ID，说明行由别处写入、图只记住它在哪——与该边界天然一致。
+- Next.js 数据库主权；
+- 当前诊断和课程 API 的幂等语义；
+- 固定题目与来源快照；
+- 形成性/总结性证据边界；
+- 不暴露模型内部思维链；
+- 图状态只保存 ID 和小型状态，不复制完整正文和文档。
 
-代价是节点内多一次网络往返，且单个节点无法把多次落库调用包进同一个事务。后者由图的断点恢复兜底，不依赖数据库事务。
+## 11. 修订后的版本路线
 
-本地开发可继续使用 SQLite；LangGraph checkpoint 应使用持久化 checkpointer，并通过 `thread_id` 与 `workflow_runs.thread_id` 对应。生产环境再把业务数据库和 checkpoint 迁到 PostgreSQL。
+### V0.4.2：工程最小闭环——已完成并冻结
 
-## 5. 数据库 V2
+- 三档基础；
+- 能力拆分；
+- 自适应初始诊断；
+- 课程骨架和首课；
+- Tutor 形成性小测；
+- 掌握度、任务和下一课回边；
+- 数据库恢复与幂等。
 
-`DATABASE_SCHEMA_VERSION = 2` 新增：
+后续只修缺陷，不再在 V0.4.2 内加入 RAG、框架迁移或阶段考核。
 
-| 数据域 | 表 |
+### V0.4.3：通用课程内容引擎
+
+详细实施契约、质量门禁、数据设计与验收标准见 [V0.4.3 实施方案](IMPLEMENTATION_PLAN_V043.md)。
+
+截至 2026-08-30，以下核心项已经落地；真实模型完整链路在复杂修复分支下可能接近 5 分钟，块级后台生成和人工质量盲评仍待继续。
+
+1. 建立 `CapabilityType` 和通用 `LearningBlock` 契约；
+2. 让周期、投入、能力估时决定模块和课时，不再固定 5 节；
+3. 以软件开发学习作为第一套领域策略；
+4. 重写 Tutor 单课生成输入输出；
+5. 建立内容版本和质量门禁；
+6. 模型失败或质量不足时停止推进并明确提示；
+7. 课后题必须在课程通过质量门禁后生成；
+8. 保留旧课程读取兼容，不强制把旧字符串内容伪装成新内容块。
+
+### V0.4.4：私有资料 RAG 与可追溯教学来源
+
+详细范围、Schema V8、数据契约、安全边界和验收标准见 [V0.4.4 实施方案](IMPLEMENTATION_PLAN_V044.md)。核心版只做：
+
+1. 支持 PDF、DOCX、TXT 和粘贴文本；
+2. 建立不可变资料版本、确定性分块和 FTS5；
+3. 课程必要教学块绑定真实来源片段；
+4. 题目、参考答案和 rubric 绑定同一来源快照；
+5. 评分不重新检索，历史标准不随资料更新改变；
+6. 资料不足时进入 `source_insufficient`；
+7. 页面展示来源标题、页码/章节和引用片段。
+
+Embedding、用户指定 URL 和联网可信来源分别延后到 V0.4.4.1–V0.4.4.3，避免个人项目在一个版本同时实现解析、向量检索、联网抓取和来源安全。
+
+### V0.4.5：Pydantic AI 与 LangGraph 迁移
+
+1. 建立 FastAPI、Pydantic AI 和 LangGraph 工程；
+2. 先迁移 `goal_onboarding` 和逐题诊断；
+3. 再迁移课程生成和补课循环；
+4. 使用持久化 checkpointer、`thread_id`、幂等键、超时和重试；
+5. Next.js 继续作为数据库唯一业务写入方；
+6. 浏览器不直接访问 Python 服务。
+
+### V0.5：补课循环与独立考核
+
+1. Tutor 不合格后的补充讲解和变式重测；
+2. 间隔复习和长期薄弱能力回收；
+3. Examiner 阶段大考；
+4. 模拟面试；
+5. 毕业门禁；
+6. 形成性证据和总结性证据分开统计；
+7. Examiner 通用考核数据结构。
+
+## 12. V0.4.3 的实施顺序
+
+### 12.1 先定义契约，不先改页面
+
+1. `CapabilityType`；
+2. `LessonOutline`；
+3. `LearningBlock` 联合类型；
+4. `LessonContentOutput`；
+5. `EvidenceRequirement`；
+6. `LessonQualityReport`；
+7. 旧课节到新课节的兼容读取规则。
+
+### 12.2 重写 Planner 骨架
+
+- 按能力依赖生成模块；
+- 按目标周期和可用时间生成预计课时；
+- 每课限制合理目标数量；
+- 标注能力类型和证据类型；
+- 只安排骨架，不生成正文。
+
+### 12.3 重写 Tutor 内容生成
+
+Tutor 输入必须至少包含：
+
+- 完整目标描述；
+- 当前能力及依赖；
+- 能力类型；
+- 诊断中的具体强弱证据；
+- 当前 LessonOutline；
+- 可用来源片段接口；
+- 领域策略；
+- 已生成课程摘要，避免重复。
+
+Tutor 输出为结构化内容块，不再输出单段 `explanation`。
+
+### 12.4 增加质量门禁
+
+- 结构硬校验；
+- 目标覆盖校验；
+- 通用模板命中校验；
+- 内容具体性校验；
+- 练习与教学内容对齐；
+- 来源接口预留；
+- 失败后保留草稿和原因，不标记 `ready`。
+
+### 12.5 最后修改 UI
+
+- 按内容块渲染；
+- 展示生成模式和质量状态；
+- 失败时提供重试；
+- 展示预计时长和课程阶段；
+- 不在 `quality_failed` 时展示正式课后考核入口。
+
+## 13. V0.4.3 完成标准
+
+### 13.1 结构与调度
+
+- 课程节数不再固定为 5；
+- 一周目标和三个月目标在模块、课时或节奏上产生可解释差异；
+- 每节课最多聚焦少量明确目标；
+- 后续课节继续按需生成，不提前生成全部正文。
+
+### 13.2 内容质量
+
+- 正式课节使用结构化 `LearningBlock[]`；
+- 每个目标至少被一个教学块覆盖；
+- 每课至少有一个具体示范/案例/worked example；
+- 每课包含常见错误或适用边界；
+- 练习能够由实际教学内容支持；
+- 通用占位模板不能通过质量门禁；
+- LLM 失败不能静默保存为正式课程；
+- 软件开发领域至少验证概念课、调试课和项目课三种策略。
+
+### 13.3 考核门禁
+
+- `quality_failed` 或来源不足的课节不能生成正式课后题；
+- 题目绑定本课目标和教学块；
+- 参考答案和 rubric 不下发浏览器；
+- 普通任务 PATCH 仍不能绕过答题完成门禁；
+- 重测保留历史 attempt。
+
+### 13.4 工程质量
+
+- 数据库迁移同时覆盖新库和旧库；
+- `typecheck`、`lint`、`db:validate`、生产构建通过；
+- 端到端回归同时覆盖 LLM 成功、规则回退、质量失败和课程通过；
+- README 与本文档同步更新；
+- 课程生成记录 provider、model、Token、耗时、策略版本和质量结果。
+
+## 14. 质量指标与项目亮点
+
+当前不能宣称提升了学习效果百分比。V1 先建立可以持续统计的过程指标：
+
+| 指标 | 含义 |
 |---|---|
-| 目标自评 | `goal_learning_profiles` |
-| 能力模型 | `goal_skills`、`skill_mastery` |
-| 课程 | `learning_programs`、`course_modules`、`course_lessons` |
-| 任务课程关系 | `task_lesson_links` |
-| 初始诊断 | `diagnostic_assessments`、`diagnostic_questions`、`diagnostic_attempts` |
-| 课后考核 | `lesson_assessment_attempts` |
-| 工作流与成本 | `workflow_runs`、`agent_runs` |
+| `lesson_quality_pass_rate` | 初次生成即可通过质量门禁的课节比例 |
+| `silent_fallback_rate` | 应为 0；模型失败不能静默成为正式课程 |
+| `source_coverage` | 教学目标被可靠来源覆盖的比例 |
+| `objective_block_coverage` | 每个目标是否有对应教学块 |
+| `practice_alignment` | 练习与实际教学块的对应程度 |
+| `generic_pattern_rate` | 课程中通用模板命中的比例 |
+| `lesson_regeneration_rate` | 因质量不足重新生成的比例 |
+| `formative_pass_rate` | 形成性小测通过率，需结合难度解释 |
+| `mastery_gain` | 相同能力在可比前后测中的变化，后续建立 |
 
-课程正文和题目中的变长结构暂存为 JSON 文本；需要查询和统计的状态、分数、能力、顺序和关联全部使用普通字段。
+项目亮点应表述为：
 
-`DATABASE_SCHEMA_VERSION = 3` 在此基础上给 `goals` 增加了可计算的 `target_date`，并引入 `COLUMN_ADDITIONS` 幂等加列机制——`CREATE TABLE IF NOT EXISTS` 对已存在的表会整条跳过，加新列必须同时写进建表语句和加列数组。详见[开发者手册 §3.4](DEVELOPER_HANDBOOK.md)。
+> 构建一个证据驱动的通用学习内核：系统根据能力类型选择教学策略，以私有资料和可信网络来源生成结构化课程；课程只有通过目标覆盖、来源、具体性和练习对齐门禁后才能进入考核，并根据答题证据持续更新能力画像和后续计划。
 
-执行以下命令可在内存 SQLite 中完整创建并校验 schema：
+## 15. 当前非目标
 
-```powershell
-npm.cmd run db:validate
-```
+- V0.4.3 不实现所有学科领域策略；
+- V0.4.3 不实现音频、视频和图片评分；
+- V0.4.3 不引入 LangGraph/Pydantic AI；
+- V0.4.3 不实现阶段大考和毕业门禁；
+- V0.4.3 不宣称教育效果已经被真实用户实验验证；
+- V0.4.3 不把本地通用模板扩写成新的伪课程；
+- 移动端继续暂停。
 
-## 6. 实施顺序
+## 16. 后续维护者必须保持的约束
 
-### V0.4.1：数据持久化
+1. 教学质量问题不能通过增加 Prompt 字数或更换更大模型简单宣布解决。
+2. RAG 提供知识依据，教学内容模型提供教学结构，两者不能互相替代。
+3. 课程未通过质量门禁时不能产生计入掌握度的正式考核。
+4. Tutor 形成性证据不能直接充当阶段通过或毕业证明。
+5. Examiner 初始诊断和后续考核是同一个角色的不同操作，不新增重复 Agent。
+6. 参考答案、rubric 和受保护来源片段不能提前下发浏览器。
+7. 掌握度、难度、任务完成和阶段门禁仍由确定性规则和 Next.js 事务控制。
+8. 任何框架迁移都不得破坏现有幂等、恢复和数据库主权。
+9. 编程是第一套领域策略，不得把代码字段写死进通用课程顶层契约。
+10. 每次功能、接口、数据库或运行方式变化必须同步更新 README 和本文档。
 
-- 为目标创建接口加入 `selfLevel`、`weeklyHours` 和 `background`。
-- 把当前 localStorage 课程写入 V2 课程表。
-- 课程任务通过 `task_lesson_links` 关联，不再按标题匹配。
-- 课后评分写入 `lesson_assessment_attempts`。
+## 17. 参考资料
 
-### V0.4.2：最小学习闭环
-
-完整设计见 [V0.4.2 实施方案](IMPLEMENTATION_PLAN_V042.md)，Agent 角色与信息边界见 [Agent 角色与信息边界](AGENT_ROLES.md)。要点：
-
-- 按角色重组 Agent 层：规划员、导师、考官各自拥有稳定的信息边界和公共 policy；导师负责课程讲解与形成性小测，考官负责初始诊断和后续阶段大考/模拟面试。
-- **初始诊断前置**：创建目标时必选三档基础，先拆能力；`familiar`、`intermediate` 完成诊断后才允许生成课程，`beginner` 跳过时保持“未知基线”而不是伪造零分。
-- **课程改为骨架先行、章节按需生成**，删除 `genericLessons` / `agentLessons` 正常模板路径；先生成第一节，课后证据确定难度后再生成下一节。
-- **两类考核分开**：导师根据本节实际教学和学习者卡点生成巩固题、评分与补充讲解；考官不参与课程小测，只按目标能力标准执行初始诊断、大考与面试。
-- 闭环回边：导师形成性证据 → Next.js 事务更新 `skill_mastery` / 章节 / 关联任务 → LearningPolicy 决定难度 → 导师生成下一节；导师成绩不能直接充当毕业证明。
-- 本轮不引入 LangGraph：诊断等待先由数据库状态和幂等 API 实现，V0.4.3 再迁移为 `interrupt` 与 checkpoint。
-
-创建目标时勾选能力模块、可行性审查确认仍排到 V0.4.3；初始诊断属于课程个性化的前置证据，已经进入 V0.4.2。V0.4.2 只固化业务状态与接口，V0.4.3 接管编排，不重复定义诊断规则。
-
-规划师可行性审查的字段归属：
-
-| 字段 | 来源 |
-|---|---|
-| `availableHours` | **普通函数计算**：剩余周数 × 每周投入，见 `lib/goal-schedule.ts` |
-| `estimatedHours` | 按 `goal_skills` 逐项估时求和，**普通函数** |
-| `verdict` | `feasible` / `tight` / `unrealistic`，由两个工时的比值按阈值判定，**普通函数** |
-| `reason`、`adjustments[]` | 模型输出 |
-
-**为什么审查排在能力拆解之后**：审查的核心是 `estimatedHours`。在 `goal_skills` 存在之前，模型只能从目标标题猜一个数，既不可解释也无法追问；先拆解、再逐项估时，用户才能看到「哪一项占了 40 小时」并据此调整。同样的拆解结果也是课程个性化和后期进度监督的依据，所以它是三者共同的地基。
-
-### V0.4.3：Python 工作流服务
-
-- 建立 FastAPI、LangGraph 和 Pydantic AI 基础工程。
-- 先实现 `goal_onboarding` 一张图，并把 V0.4.2 已有的诊断暂停状态接成 `interrupt`。
-- 接入持久化 checkpointer、幂等键、超时、重试和 `agent_runs` Token 记录。
-- Next.js 通过内部服务密钥调用，不向浏览器暴露 Python 服务。
-
-### V0.5：自适应循环
-
-- 不合格进入补充讲解和重测分支。
-- 在 V0.4.2 原子更新能力掌握度和任务的基础上，增加补课、重测和间隔复测循环。
-- 根据长期薄弱能力重排后续骨架或增加复测任务。
-- 增加考官负责的阶段大考、模拟面试和毕业门禁，并把总结性证据与导师形成性小测分开统计。
-
-## 7. 当前边界
-
-本次已完成数据库 V2 schema 和校验脚本，尚未修改创建目标 API、页面自评控件，也尚未引入 Python/LangGraph/Pydantic AI 依赖。先稳定数据契约，再接工作流，可以避免 UI、Node API 和 Python 状态各存一份互相冲突的数据。
-
-参考：
-
+- [V0.4.2 当前实现基线](IMPLEMENTATION_PLAN_V042.md)
+- [Agent 角色与信息边界](AGENT_ROLES.md)
+- [开发者手册](DEVELOPER_HANDBOOK.md)
 - [LangGraph Graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)
 - [LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
 - [LangGraph Interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)

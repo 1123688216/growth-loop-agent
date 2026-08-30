@@ -8,6 +8,8 @@ import {
   BedDouble,
   Brain,
   BookOpen,
+  CircleAlert,
+  CircleCheck,
   CalendarDays,
   Check,
   ChevronRight,
@@ -31,6 +33,8 @@ import {
 } from "lucide-react";
 import { demoSeed, type DemoSeed, type Goal, type Task, type TaskKind } from "@/lib/demo-data";
 import { availableHours, minTargetDate, weeksUntil } from "@/lib/goal-schedule";
+import { reviewBudget, type BudgetAllocation, type UserLearningProfile } from "@/lib/learning-budget";
+import LearningProfileForm from "./learning-profile-form";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
 import type { CourseLesson, CourseLessonGrade, DiagnosticAssessment, DiagnosticGrade, DiagnosticQuestionResult, GoalPreparation, LearningProgram } from "@/lib/learning-program/types";
 import LearningStudio, { PROGRAM_STORAGE_KEY } from "./learning-studio";
@@ -266,6 +270,9 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [isQuickLogOpen, setIsQuickLogOpen] = useState(false);
   const [courseTarget, setCourseTarget] = useState<CourseTarget | null>(null);
   const [activeProgramId, setActiveProgramId] = useState("");
+  const [budget, setBudget] = useState<{ hasProfile: boolean; profile: UserLearningProfile; allocations: BudgetAllocation[] } | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [showProfileForm, setShowProfileForm] = useState(false);
   const [pendingDiagnostic, setPendingDiagnostic] = useState<DiagnosticAssessment | null>(null);
   const [diagnosticQuestionIndex, setDiagnosticQuestionIndex] = useState(0);
   const [diagnosticAnswers, setDiagnosticAnswers] = useState<Record<string, string>>({});
@@ -298,6 +305,20 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     syncHour();
     const timer = window.setInterval(syncHour, 60_000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/learning-budget")
+      .then(async (response) => response.ok ? await response.json() as { hasProfile: boolean; profile: UserLearningProfile; allocations: BudgetAllocation[] } : null)
+      .then((result) => {
+        if (!result || cancelled) return;
+        setBudget(result);
+        // 老用户和新用户都在这里补作息，注册表单不因此变重。
+        setShowProfileForm(!result.hasProfile);
+      })
+      .catch(() => { /* 读不到预算不影响主流程，创建目标时会再提示 */ });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -556,6 +577,26 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   function submitEveningClosure(answers: string[]) {
     const message = `今晚回顾：\n最重要的行动：${answers[0]}\n真正理解或应用：${answers[1]}\n明天的一步：${answers[2]}`;
     void persistLog(message);
+  }
+
+  async function saveLearningProfile(profile: UserLearningProfile) {
+    setIsSavingProfile(true);
+    try {
+      const response = await fetch("/api/learning-budget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile),
+      });
+      if (!response.ok) throw new Error("profile save failed");
+      const result = await response.json() as { hasProfile: boolean; profile: UserLearningProfile; allocations: BudgetAllocation[] };
+      setBudget(result);
+      setShowProfileForm(false);
+      notify("学习作息已保存，规划师会按它安排每日任务");
+    } catch {
+      notify("作息没有保存成功，请稍后重试");
+    } finally {
+      setIsSavingProfile(false);
+    }
   }
 
   async function createGoal(value: CreateGoalInput, onProgress?: GoalCreationReporter) {
@@ -889,7 +930,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
               pomodoro={<PomodoroWidget mode={pomodoroMode} seconds={pomodoroSeconds} isRunning={isPomodoroRunning} onToggle={togglePomodoro} onReset={resetPomodoro} onModeChange={changePomodoroMode} />}
             />
           ) : activeTab === "计划" ? (
-            <PlanPanel dashboard={dashboard} tasks={tasks} onSplitGoal={splitGoal} onResumeGoal={resumeGoal} onCreateGoal={createGoal} onDeleteGoal={deleteLongTermGoal} onOpenCourse={() => setActiveTab("课程")} />
+            <PlanPanel dashboard={dashboard} tasks={tasks} onSplitGoal={splitGoal} onResumeGoal={resumeGoal} onCreateGoal={createGoal} onDeleteGoal={deleteLongTermGoal} onOpenCourse={() => setActiveTab("课程")} budget={budget} onEditBudget={() => setShowProfileForm(true)} />
           ) : activeTab === "课程" ? (
             <LearningStudio goals={dashboard.goals} onSelectGoal={resumeGoal} onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} programId={activeProgramId} targetLessonId={courseTarget?.lessonId} onLessonPassed={handleLessonPassed} />
           ) : activeTab === "记录" ? (
@@ -950,6 +991,20 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
           <div className="goal-creation-progress-events">{diagnosticProgressEvents.map((event, index) => <div className={index === diagnosticProgressEvents.length - 1 ? "is-current" : "is-finished"} key={`${event.stage}-${index}`}><span className="goal-creation-event-icon">{index < diagnosticProgressEvents.length - 1 ? <Check size={11} /> : <i />}</span><span>{event.message}</span><em>{event.percent}%</em></div>)}</div>
           <div className="goal-progress-dialog-footer"><span>只展示评分节点与产物，不展示模型内部推理原文。</span></div>
         </section>
+      </div>}
+
+      {showProfileForm && budget && <div className="quick-log-overlay" role="dialog" aria-modal="true" aria-label="学习作息">
+        <button className="quick-log-backdrop" aria-label="关闭" onClick={() => setShowProfileForm(false)} />
+        <LearningProfileForm
+          initial={budget.profile}
+          saving={isSavingProfile}
+          onSave={(profile) => void saveLearningProfile(profile)}
+          onSkip={budget.hasProfile ? () => setShowProfileForm(false) : undefined}
+          title={budget.hasProfile ? "调整学习作息" : "先说说你一周能学多久"}
+          description={budget.hasProfile
+            ? "改动会影响每周预算和跨目标的时间校验。"
+            : "创建目标时会从这份预算里分配时间，也用来判断安排得开不开。"}
+        />
       </div>}
 
       {toast && <div className="toast" role="status" aria-live="polite"><span className="toast-status" /> {toast}</div>}
@@ -1066,7 +1121,7 @@ function renderTaskKindIcon(kind: TaskKind, size: number) {
 
 const EMPTY_GOAL_DRAFT: CreateGoalInput = { title: "", description: "", targetDate: "", background: "", weeklyHours: 4, selfLevel: "" };
 
-function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, onDeleteGoal, onOpenCourse }: { dashboard: DemoSeed; tasks: Task[]; onSplitGoal: (goal: Goal) => void; onResumeGoal: (goal: Goal) => Promise<void>; onCreateGoal: (value: CreateGoalInput, onProgress?: GoalCreationReporter) => Promise<false | "goal" | "course" | "diagnostic">; onDeleteGoal: (goal: Goal) => Promise<boolean>; onOpenCourse: () => void }) {
+function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, onDeleteGoal, onOpenCourse, budget, onEditBudget }: { dashboard: DemoSeed; tasks: Task[]; onSplitGoal: (goal: Goal) => void; onResumeGoal: (goal: Goal) => Promise<void>; onCreateGoal: (value: CreateGoalInput, onProgress?: GoalCreationReporter) => Promise<false | "goal" | "course" | "diagnostic">; onDeleteGoal: (goal: Goal) => Promise<boolean>; onOpenCourse: () => void; budget: { hasProfile: boolean; profile: UserLearningProfile; allocations: BudgetAllocation[] } | null; onEditBudget: () => void }) {
   const [view, setView] = useState<"week" | "long">("week");
   const [showCreateGoal, setShowCreateGoal] = useState(false);
   const [goalDraft, setGoalDraft] = useState<CreateGoalInput>(EMPTY_GOAL_DRAFT);
@@ -1078,6 +1133,15 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
   const completed = tasks.filter((task) => task.status === "done").length;
   const plannedWeeks = weeksUntil(goalDraft.targetDate || null);
   const plannedHours = availableHours(goalDraft.targetDate || null, goalDraft.weeklyHours);
+  // 跨目标总量在填表时就实时算，而不是创建完再告诉用户超了。
+  // reviewBudget 是纯函数，客户端和服务端用同一份逻辑。
+  const budgetReview = budget?.hasProfile
+    ? reviewBudget({
+      profile: budget.profile,
+      allocations: budget.allocations,
+      incoming: { title: goalDraft.title || "这个目标", weeklyMinutes: goalDraft.weeklyHours * 60 },
+    })
+    : null;
   const showCreationProgress = isCreating || creationProgress?.status === "error";
   const visibleCreationProgress: GoalCreationProgress = creationProgress || {
     stage: "starting",
@@ -1166,6 +1230,22 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
           <label className="learning-field"><span>每周投入</span><input type="number" value={goalDraft.weeklyHours} min={1} max={40} step={1} onChange={(event) => setGoalDraft((current) => ({ ...current, weeklyHours: Number(event.target.value) }))} /><small>1–40 小时</small></label>
         </div>
         <div className="goal-course-note goal-budget-note"><Timer size={14} /><span>{goalDraft.targetDate ? <>还剩 <strong>{plannedWeeks}</strong> 周 · 按每周 {goalDraft.weeklyHours} 小时算，到期前大约有 <strong>{plannedHours}</strong> 小时可投入。</> : <>没有设定目标日期，暂时无法估算可投入的总工时。</>}</span></div>
+
+        {budgetReview && <div className={`goal-budget-review is-${budgetReview.status}`}>
+          <div className="goal-budget-review-head">
+            {budgetReview.status === "ok" ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
+            <p>{budgetReview.reason}</p>
+          </div>
+          {budgetReview.suggestions.length > 0 && <ul>
+            {budgetReview.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
+          </ul>}
+          <button type="button" className="text-button" onClick={onEditBudget}>调整每周预算 <ChevronRight size={13} /></button>
+        </div>}
+
+        {budget && !budget.hasProfile && <div className="goal-course-note">
+          <CircleAlert size={14} />
+          <span>还没设置每周可投入时间，暂时无法判断多个目标加起来排不排得开。<button type="button" className="text-button" onClick={onEditBudget}>现在设置</button></span>
+        </div>}
         <div className="goal-course-note"><Sparkles size={14} /><span>先生成完整路线，但只生成第一节正文；通过导师考核后再生成下一节。</span></div>
         <div className="quick-log-actions"><span>{goalDraft.selfLevel && goalDraft.selfLevel !== "beginner" ? "创建后先进入初始诊断" : "创建后进入首节课程"}</span><button className="primary-button" disabled={!goalDraft.title.trim() || !goalDraft.selfLevel} onClick={() => void submitGoal()}>创建目标并开始<ArrowUpRight size={15} /></button></div>
       </section>}

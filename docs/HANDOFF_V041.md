@@ -26,7 +26,7 @@ V0.4.1 开工时**新增的 12 张表零写入**，只有 `users`、`sessions`�
 | `lesson_assessment_attempts` 记录课后评分 | 已完成 | `attempt_number` 递增，合格后章节状态落库为 `passed` |
 | `goal_skills` / `skill_mastery` | 未开始 | 表已建，无引用；随 V0.4.2 诊断评分一起写入 |
 | 三档自评与诊断分支 | 未开始 | 属 V0.4.2。数据契约已就位：`self_level` 已落库，`diagnostic_required` / `diagnostic_status` 由自评推导 |
-| Python / LangGraph / Pydantic AI | 未开始 | 属 V0.4.3，依赖中尚未引入 |
+| Python / LangGraph / Pydantic AI | 未开始 | 按修订路线属 V0.4.5，依赖中尚未引入 |
 
 ## 2. 关键问题：课程快照握在客户端（已解决）
 

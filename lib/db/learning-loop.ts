@@ -5,9 +5,9 @@ import type { DiagnosticQuestionDraft, PersistedSkill, SkillDraft } from "@/lib/
 import { getDatabase, withTransaction } from "@/lib/db";
 import type { SelfLevel } from "@/lib/db/goals";
 import type { AdaptiveDiagnosticState } from "@/lib/learning-loop/adaptive";
-import type { DiagnosticAssessment, DiagnosticGrade, DiagnosticQuestion } from "@/lib/learning-program/types";
+import type { CapabilityType, DiagnosticAssessment, DiagnosticGrade, DiagnosticQuestion } from "@/lib/learning-program/types";
 
-type SkillRow = { id: string; name: string; description: string; target_level: number; weight: number };
+type SkillRow = { id: string; name: string; description: string; target_level: number; weight: number; capability_type: CapabilityType };
 type DiagnosticRow = {
   id: string;
   goal_id: string;
@@ -43,12 +43,12 @@ type DiagnosticResponseRow = {
 };
 
 function toSkill(row: SkillRow): PersistedSkill {
-  return { id: row.id, name: row.name, description: row.description, targetLevel: row.target_level, weight: row.weight };
+  return { id: row.id, name: row.name, description: row.description, targetLevel: row.target_level, weight: row.weight, capabilityType: row.capability_type };
 }
 
 export function readGoalSkills(userId: string, goalId: string): PersistedSkill[] {
   const rows = getDatabase().prepare(`
-    SELECT id, name, description, target_level, weight
+    SELECT id, name, description, target_level, weight, capability_type
     FROM goal_skills WHERE goal_id = ? AND user_id = ? AND status = 'active'
     ORDER BY created_at, id
   `).all(goalId, userId) as SkillRow[];
@@ -66,9 +66,9 @@ export function ensureGoalSkills(userId: string, goalId: string, drafts: SkillDr
     for (const draft of drafts) {
       const skillId = randomUUID();
       database.prepare(`
-        INSERT INTO goal_skills (id, goal_id, user_id, name, description, target_level, weight, source, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'agent', ?, ?)
-      `).run(skillId, goalId, userId, draft.name, draft.description, draft.targetLevel, draft.weight, now, now);
+        INSERT INTO goal_skills (id, goal_id, user_id, name, description, target_level, weight, capability_type, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, ?)
+      `).run(skillId, goalId, userId, draft.name, draft.description, draft.targetLevel, draft.weight, draft.capabilityType, now, now);
       // 0 分 + 0 置信度表示未知，而不是断言完全不会。
       database.prepare(`
         INSERT INTO skill_mastery (user_id, skill_id, mastery_score, confidence, evidence_count, updated_at)
@@ -389,7 +389,7 @@ export function readSkillMastery(userId: string, skillId: string) {
 export function recordAgentRun(input: {
   userId: string;
   goalId?: string;
-  agentType: "planner" | "tutor" | "examiner";
+  agentType: "planner" | "tutor" | "examiner" | "guard";
   nodeName: string;
   request: unknown;
   result: AgentResult<unknown>;
@@ -398,12 +398,13 @@ export function recordAgentRun(input: {
   getDatabase().prepare(`
     INSERT INTO agent_runs (
       id, user_id, goal_id, agent_type, node_name, input_json, output_json, provider, model,
-      prompt_tokens, completion_tokens, total_tokens, latency_ms, status, created_at, completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      prompt_tokens, completion_tokens, total_tokens, latency_ms, status, error_message, created_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     randomUUID(), input.userId, input.goalId || null, input.agentType, input.nodeName,
     JSON.stringify(input.request), JSON.stringify(input.result.data), input.result.provider, input.result.model,
     input.result.usage.promptTokens, input.result.usage.completionTokens, input.result.usage.totalTokens,
-    input.result.latencyMs, input.result.mode === "llm" ? "completed" : "fallback", now, now,
+    input.result.latencyMs, input.result.mode === "llm" ? "completed" : "fallback",
+    input.result.fallbackReason, now, now,
   );
 }

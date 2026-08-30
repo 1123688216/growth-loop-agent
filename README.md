@@ -2,11 +2,36 @@
 
 一个把“今天做了什么”变成下一步行动的自我提升 Agent。用户可以直接和 AI 对话，记录学习、运动、生活和休息；Agent 负责整理、安排、复盘，并把可验证的行动记入成长轨迹。
 
-> 当前版本是可运行的本地原型，不是生产 SaaS。项目已经包含 Next.js Web、Capacitor Android 工程、确定性 demo 数据、OpenAI-compatible LLM 接口、微信公众号明文回调、理解测验和电脑 Android Emulator 调试链路。
+> 当前版本是可运行的原型，可部署为邀请制公网 Demo，但不是生产 SaaS。项目已经包含 Next.js Web、Capacitor Android 工程、确定性 demo 数据、OpenAI-compatible LLM 接口、微信公众号明文回调、理解测验和电脑 Android Emulator 调试链路。
 
 ## 变更记录
 
 后续每次功能、接口、数据结构或运行方式发生变化，都必须同步更新本节。标记含义：`新增` 表示新能力，`修改` 表示既有行为变化，`修复` 表示缺陷修正，`暂未实现` 表示已经确定但尚未落地的边界。
+
+### 2026-08-30 · V0.4.4 私有资料 RAG（设计冻结，尚未实现）
+
+| 标记 | 改动 | 主要位置 |
+|---|---|---|
+| **新增** | 编写 V0.4.4 独立实施方案，冻结“私有资料导入 → 不可变版本 → 确定性分块 → FTS5 检索 → 教学块/题目来源绑定 → 固定快照评分”的最小闭环 | `docs/IMPLEMENTATION_PLAN_V044.md` |
+| **修改** | Schema V8 留给资料、版本、片段、目标资料关系、检索运行和题目来源；V0.4.3.1 尚未实现的课堂标注与 `open_book` 顺延到 V9 | `docs/IMPLEMENTATION_PLAN_V043.md`、`docs/IMPLEMENTATION_PLAN_V044.md` |
+| **暂未实现** | 本文目前只有设计，不代表已经支持上传 PDF/DOCX/TXT、FTS5、来源引用或联网搜索；Embedding、URL 与联网来源分别放到 V0.4.4.1–V0.4.4.3 | `docs/IMPLEMENTATION_PLAN_V044.md` |
+
+### 2026-08-30 · V0.4.3 通用课程内容引擎（工程 MVP 已实现）
+
+| 标记 | 改动 | 主要位置 |
+|---|---|---|
+| **修改** | 课程不再固定为 5 节，由目标期限、每周投入和能力数量动态生成 3–12 节路线；能力点增加概念理解、程序技能、问题解决、表达沟通、记忆辨析和综合创作六类教学策略 | `lib/agents/planner.ts`、`lib/agents/types.ts` |
+| **新增** | 新课正文改为版本化 `LearningBlock[]`，统一保存讲解/关系/对比、完整示例/演示/代码实验、错误/边界和引导/回忆/表达练习，并为每节定义可观察的完成证据 | `lib/learning-program/types.ts`、`lib/agents/tutor.ts` |
+| **新增** | 发布前执行确定性质量门禁和独立语义复核；未通过时最多定向修复 2 次，仍失败则保存 `quality_failed` 并在课程页提供重试，不再把通用回退伪装成正式 AI 课程 | `lib/learning-program/quality.ts`、`lib/learning-loop/service.ts`、`app/learning-studio.tsx` |
+| **新增** | 形成性题目只在正文通过质量门禁后生成，每题绑定不可变内容版本、已教学块、证据类型和预期概念；评分尝试同时保存题目快照，公开接口继续剥离参考答案和 rubric | `lib/agents/tutor.ts`、`lib/db/programs.ts`、`app/api/learning-program/route.ts` |
+| **新增** | 数据库升级到 V6，新增 `lesson_content_versions`、`lesson_quality_reports`、`lesson_block_sources`，并为能力、课节和评测补充内容版本、来源、质量、能力类型和题目快照字段 | `lib/db/schema.ts`、`scripts/validate-database-schema.mjs` |
+| **修改** | 课程页按教学块渲染，展示能力类型、来源状态和质量状态；失败课节不展示正式答题入口，可通过“重新生成本节”再次进入质量链 | `app/learning-studio.tsx`、`app/globals.css`、`app/api/learning-program/route.ts` |
+| **修复** | 模型节点支持 75–120 秒的分级等待并把超时、空响应、解析和校验失败写入 `agent_runs.error_message`；示例步骤单项上限从通用列表的 180 字符放宽到 2400 字符，避免完整代码被清洗层截断 | `lib/agents/shared.ts`、`lib/agents/planner.ts`、`lib/agents/tutor.ts` |
+| **新增** | 新增 V0.4.3 质量回归，覆盖 Java 并发、技术演讲和近代史辨析三类目标、动态课时、教学块完整性、题目追溯、答案隔离、质量阶段和非代码能力策略 | `scripts/v043-quality-smoke.mjs`、`scripts/learning-program-smoke.mjs` |
+| **新增** | V0.4.3.1 基础课件阅读器已落地：结构化新课一次只渲染一个教学块，支持页码/进度点、按钮与键盘翻页、交付物页、独立考核页和按内容版本恢复阅读位置；考核页关闭导师问答 | `app/learning-studio.tsx`、`app/globals.css` |
+| **修改** | 对齐课件阅读器文档与当前实现，明确上下文块提问、困惑/收藏、交互块作答、长代码工具和 `open_book` 仍未实现；当前 Schema V7 已被学习作息占用，V8 留给 V0.4.4 可信来源/RAG，未来课堂标注迁移顺延为 V9 | `docs/IMPLEMENTATION_PLAN_V043.md` |
+
+验证结果：`typecheck`、`lint`、`db:validate` 和隔离数据库规则模式 E2E 已通过；V0.4.3 核心引入 Schema V6，当前项目后续已升级到 Schema V7（25 张表、17 项增量字段、`integrity_check=ok`）。规则回归中 Java/演讲/历史三个固定样例均通过质量门禁，所有正式题目绑定当前内容版本和有效教学块，公开响应中的参考答案与 rubric 为 0。浏览器实测阅读器只渲染当前教学块，按钮和方向键可连续翻页，刷新后能从 `03 / 09` 恢复。真实模型完整课程链仍可能接近 5 分钟；当前不能据此宣称学习效果提升，也不能把尚未实现的课堂标注写成现有能力。
 
 ### 2026-08-28 · 逐题自适应初始诊断与考官评分进度（已实现）
 
@@ -21,8 +46,12 @@
 | **修改** | 旧版尚未完成的整套诊断不会被误当作自适应诊断继续使用，重新开始时会过期旧记录并创建新的逐题诊断；已完成诊断仍保持幂等回放 | `lib/db/learning-loop.ts`、`lib/learning-loop/service.ts` |
 | **新增** | 端到端回归同时注入高质量答案与“不会”答案，断言出现难度上调和下调、每轮只新增一题、逐题证据落库、评分进度到达 100%、诊断幂等回放及后续课程闭环 | `scripts/learning-program-smoke.mjs` |
 | **修改** | `V0.4.2 实施方案` 增加面向其他 LLM 的当前实现基线，集中记录题目来源、自适应算法、NDJSON 协议、数据库 V5、UI 行为、角色边界、代码索引、验证结果、未实现项和后续修改约束，并明确标注下文早期固定题量方案为历史记录 | `docs/IMPLEMENTATION_PLAN_V042.md` |
+| **修改** | 全面修订 V1 路线图：将教学质量提升为正式考核的前置门禁，增加通用能力类型、结构化 `LearningBlock`、课程质量报告、私有资料/联网 RAG 来源链和可见回退；V0.4.3 先实现通用课程内容引擎，V0.4.4 接入可信 RAG，V0.4.5 再迁移 Pydantic AI/LangGraph，V0.5 才推进补课、阶段考核与毕业门禁 | `docs/IMPLEMENTATION_PLAN_V1.md` |
+| **新增** | 编写独立 V0.4.3 实施方案，冻结“结构化课程生成 → 双层质量门禁 → 定向修复 → 教学块对齐小测 → 版本化证据”的范围，补充通用能力模型、拟定数据库 V6、测试指标与 Definition of Done；本行记录的是 8 月 28 日当时状态，后续实现见上方 V0.4.3 记录 | `docs/IMPLEMENTATION_PLAN_V043.md` |
+| **修改** | 对齐跨文档版本边界：V0.4.3 负责教学质量，V0.4.4 负责可信 RAG，Pydantic AI/LangGraph 框架迁移统一调整到 V0.4.5；同步修正 V0.4.1 交接、V0.4.2 交接与 Roles 说明 | `docs/HANDOFF_V041.md`、`docs/IMPLEMENTATION_PLAN_V042.md`、`docs/AGENT_ROLES.md`、`docs/IMPLEMENTATION_PLAN_V1.md` |
+| **新增** | 增加邀请制公网 Demo 部署方案，固定支持 `node:sqlite` 的 Node.js 22/24 运行时，并记录 Zeabur GitHub 部署、`/data` 持久化卷、HTTPS Cookie、LLM Secret、上线验收和体验反馈边界 | `package.json`、`.node-version`、`docs/DEMO_DEPLOYMENT.md` |
 
-验证结果：`typecheck`、`lint`、`db:validate`、Next.js 生产构建全部通过；隔离 SQLite 端到端回归返回 `ok: true`，自适应诊断在 10 题内完成，高低分分别触发上探和下探，最终生成 5 节课程骨架并完成首课评测闭环。临时测试数据库已删除，未影响日常数据。
+验证结果：`typecheck`、`lint`、`db:validate`、Next.js 生产构建全部通过；隔离 SQLite 端到端回归返回 `ok: true`，自适应诊断在 10 题内完成，高低分分别触发上探和下探，最终生成 5 节课程骨架并完成首课评测闭环。新增 Demo 部署配置后再次通过 Next.js 生产构建。临时测试数据库已删除，未影响日常数据。
 
 ### 2026-08-27 · 长期目标删除闭环（已实现）
 
@@ -84,7 +113,7 @@
 | **新增** | 数据库升级到 V4，为课节增加 `generation_mode`、`generation_status`、`difficulty`，同时记录角色调用的 provider、model、Token 与耗时 | `lib/db/schema.ts`、`lib/db/learning-loop.ts` |
 | **修改** | `LLM_PROVIDER=demo/rules/local` 明确关闭外部模型并使用本地规则回退，便于无 Key 运行和确定性回归 | `lib/agents/shared.ts`、`lib/learning-program/service.ts` |
 | **新增** | 闭环冒烟测试覆盖：诊断门禁与幂等、初学者分支、首课按需生成、参考答案隔离、课程任务防绕过、评测证据更新、下一课生成 | `scripts/learning-program-smoke.mjs` |
-| **暂未实现** | LangGraph checkpoint / interrupt、Pydantic AI Python 服务、导师不合格后的专门补课循环、阶段大考/模拟面试/毕业门禁 | V0.4.3–V0.5 |
+| **暂未实现** | LangGraph checkpoint / interrupt、Pydantic AI Python 服务、导师不合格后的专门补课循环、阶段大考/模拟面试/毕业门禁 | V0.4.5–V0.5 |
 
 验证结果：`typecheck`、`lint`、`db:validate`、Next.js 生产构建全部通过；在独立 SQLite 数据库上完成多次端到端回归，最终结果为 `ok: true`，诊断 100 分、首节形成性评测 85 分、尝试次数按 1 → 2 递增、关联任务自动完成、第二节难度上调并由 `planned` 转为 `ready`。临时数据库已删除，未污染日常数据。
 
@@ -95,7 +124,7 @@
 | **修改** | V0.4.2 不再按“默认初学者、掌握度为 0、立即生成整套课程”推进；改为创建目标时必选三档基础，先拆能力，再决定是否进入诊断 | `docs/IMPLEMENTATION_PLAN_V042.md` |
 | **修改** | `familiar`、`intermediate` 必须完成 5–8 道初始诊断题，诊断完成是课程生成门禁；`beginner` 可跳过，但 `confidence = 0` 只表示尚无证据 | `docs/IMPLEMENTATION_PLAN_V042.md` |
 | **修改** | 课程在基线确定后只生成完整骨架与第一节内容，后续章节在上一节产生评测证据后按需生成，使难度调整真正影响未来题目 | `docs/IMPLEMENTATION_PLAN_V042.md` |
-| **修改** | V0.4.2 使用数据库状态和幂等 API 实现诊断暂停/恢复，不提前引入 LangGraph；V0.4.3 再迁移到 `interrupt` 与 checkpoint | `docs/IMPLEMENTATION_PLAN_V042.md` |
+| **修改** | V0.4.2 使用数据库状态和幂等 API 实现诊断暂停/恢复，不提前引入 LangGraph；按修订路线在 V0.4.5 再迁移到 `interrupt` 与 checkpoint | `docs/IMPLEMENTATION_PLAN_V042.md` |
 | **修改** | 明确评分证据、章节通过和关联任务完成必须由 Next.js 在同一事务中处理，课程任务不能通过普通 PATCH 绕过评测门禁 | `docs/IMPLEMENTATION_PLAN_V042.md` |
 | **修改** | 同步收紧 Roles 与 V1 契约：盲评不再宣称绝对确定性；角色共享 policy、不同操作使用独立 prompt；题目绑定 `skillId` 和 `maxScore`；权威学习状态在 Next.js 事务内计算 | `docs/AGENT_ROLES.md`、`docs/IMPLEMENTATION_PLAN_V1.md` |
 | **修改** | 重新划分考核职责：导师根据实际教学内容负责课内巩固题、课后小测和补充讲解；考官/面试官只负责初始诊断、阶段大考、模拟面试与毕业门禁，两类证据分开解释 | `docs/IMPLEMENTATION_PLAN_V042.md`、`docs/AGENT_ROLES.md`、`docs/IMPLEMENTATION_PLAN_V1.md` |
@@ -416,9 +445,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/debug-apk.ps1 -A
 | [项目亮点与量化记录](项目亮点.MD) | 当前可证明成果、后续差异化能力、量化指标与简历表述账本 |
 | [开发者与 AI 手册](docs/DEVELOPER_HANDBOOK.md) | 从 clone、配置、开发、测试到发布的完整交接手册 |
 | [网页服务配置](docs/WEB_SERVICE_SETUP.md) | 从干净 clone、环境变量到 Web/Node 服务验收；解释静态托管、API 和 Android 地址边界 |
+| [公网 Demo 部署](docs/DEMO_DEPLOYMENT.md) | Zeabur GitHub 部署、SQLite 持久化、LLM Secret、验收步骤与邀请测试边界 |
 | [AI 学习程序](docs/LEARNING_PROGRAM.md) | 通用课程编排、AI 讲师、课后评分、API 契约与 LLM smoke |
-| [V1 实施方案](docs/IMPLEMENTATION_PLAN_V1.md) | 自评诊断、LLM 题库、数据库 V2、LangGraph 与 Pydantic AI 分工 |
+| [V1 实施方案](docs/IMPLEMENTATION_PLAN_V1.md) | 教学质量优先总路线、可信来源、框架迁移与正式考核的版本边界 |
 | [V0.4.2 实施方案](docs/IMPLEMENTATION_PLAN_V042.md) | 诊断证据驱动的最小学习闭环：能力拆解、初始诊断、按需生成课程、盲评与掌握度回边 |
+| [V0.4.3 实施方案](docs/IMPLEMENTATION_PLAN_V043.md) | 结构化课程内容引擎、教学质量门禁、题目追溯，以及基础课件阅读器与待完成交互边界 |
+| [V0.4.4 实施方案](docs/IMPLEMENTATION_PLAN_V044.md) | 私有资料导入、Schema V8、FTS5 检索、块级/题目级来源快照与 RAG 验收标准 |
 | [Agent 角色与信息边界](docs/AGENT_ROLES.md) | 规划员/导师/考官/复盘员的职责、能看到什么、输出契约与复用矩阵 |
 | [产品设计方案](docs/PRODUCT_DESIGN_V1.md) | 产品目标、用户闭环、Agent、游戏化和微信路线 |
 | [微信公众号接入](docs/WECHAT_INTEGRATION.md) | 微信服务器配置、签名校验和文本回调 |

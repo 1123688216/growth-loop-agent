@@ -93,8 +93,18 @@ export async function POST(request: Request) {
 
     if (action === "generate") {
       const goalId = requiredText(body.goalId, "学习目标", 180);
-      const lessonCount = Math.max(3, Math.min(5, Number(body.lessonCount) || 5));
+      const requestedCount = Number(body.lessonCount);
+      const lessonCount = Number.isFinite(requestedCount) ? Math.max(3, Math.min(12, Math.round(requestedCount))) : undefined;
       return NextResponse.json({ program: await generateCourseForGoal(user.id, goalId, lessonCount) });
+    }
+
+    if (action === "retry-lesson") {
+      const programId = requiredText(body.programId, "课程", 180);
+      const lessonId = requiredText(body.lessonId, "课程章节", 180);
+      const found = readAuthoredLesson(user.id, programId, lessonId);
+      if (!found) return NextResponse.json({ error: "找不到要重新生成的课程章节。" }, { status: 404 });
+      if (found.lesson.generationStatus === "ready") return NextResponse.json({ program: found.program });
+      return NextResponse.json({ program: await materializeNextLesson(user.id, programId, lessonId) });
     }
 
     if (action === "tutor") {
@@ -109,12 +119,15 @@ export async function POST(request: Request) {
       const found = readAuthoredLesson(user.id, requiredText(body.programId, "课程", 180), requiredText(body.lessonId, "课程章节", 180));
       if (!found) return NextResponse.json({ error: "找不到要评分的课程章节。" }, { status: 404 });
       if (found.lesson.generationStatus !== "ready") return NextResponse.json({ error: "这节课还没有生成，不能评分。" }, { status: 409 });
+      if (!found.lesson.legacyContent && found.lesson.qualityStatus !== "passed") {
+        return NextResponse.json({ error: "这节课还没有通过教学质量门禁，不能评分。" }, { status: 409 });
+      }
       const goal = readGoalWithProfile(user.id, found.program.goalId);
       if (!goal) return NextResponse.json({ error: "找不到课程对应的目标。" }, { status: 404 });
       const skill = readGoalSkills(user.id, goal.id).find((item) => item.id === found.lesson.primarySkillId);
       if (!skill) return NextResponse.json({ error: "这节课没有关联能力点。" }, { status: 409 });
       const answers = answerMap(body.answers);
-      const material = {
+      const material = found.lesson.contentVersion?.content || {
         opening: found.lesson.opening, explanation: found.lesson.explanation, example: found.lesson.example,
         practice: found.lesson.practice, deliverable: found.lesson.deliverable, concepts: found.lesson.concepts,
       };
@@ -122,9 +135,12 @@ export async function POST(request: Request) {
         title: found.lesson.title, phase: found.lesson.phase, objective: found.lesson.objective,
         concepts: found.lesson.concepts, durationMinutes: found.lesson.durationMinutes,
         skillId: skill.id, difficulty: found.lesson.difficulty,
+        capabilityType: found.lesson.capabilityType || skill.capabilityType,
+        prerequisites: found.lesson.prerequisites || [],
+        completionEvidence: found.lesson.completionEvidence || [],
       };
       const gradingResult = await gradeLessonCheck({
-        goal: { id: goal.id, title: goal.title, description: goal.description, background: goal.background, selfLevel: goal.selfLevel, weeklyHours: goal.weeklyHours },
+        goal: { id: goal.id, title: goal.title, description: goal.description, background: goal.background, selfLevel: goal.selfLevel, weeklyHours: goal.weeklyHours, targetDate: goal.targetDate },
         skill, lesson, mastery: { score: 0, confidence: 0 }, material, questions: found.lesson.questions, answers,
       });
       recordAgentRun({ userId: user.id, goalId: goal.id, agentType: "tutor", nodeName: "grade_lesson_check", request: { lessonId: found.lesson.id, answers }, result: gradingResult });

@@ -1,4 +1,11 @@
-import type { AuthoredCourseQuestion, CourseInstructor, CourseQuestionFeedback, DiagnosticQuestionKind } from "@/lib/learning-program/types";
+import type {
+  AuthoredCourseQuestion,
+  CapabilityType,
+  CourseInstructor,
+  CourseQuestionFeedback,
+  DiagnosticQuestionKind,
+  LessonContentOutput,
+} from "@/lib/learning-program/types";
 
 export type GoalContext = {
   id: string;
@@ -7,6 +14,7 @@ export type GoalContext = {
   background: string;
   selfLevel: "beginner" | "familiar" | "intermediate";
   weeklyHours: number;
+  targetDate: string | null;
 };
 
 export type SkillDraft = {
@@ -15,6 +23,7 @@ export type SkillDraft = {
   description: string;
   targetLevel: number;
   weight: number;
+  capabilityType: CapabilityType;
 };
 
 export type PersistedSkill = Omit<SkillDraft, "key"> & { id: string };
@@ -33,10 +42,14 @@ export type CourseOutlineDraft = {
     durationMinutes: number;
     skillId: string;
     difficulty: number;
+    capabilityType: CapabilityType;
+    prerequisites: string[];
+    completionEvidence: string[];
   }>;
 };
 
-export type LessonMaterialDraft = {
+export type LessonMaterialDraft = LessonContentOutput;
+export type LegacyLessonMaterialDraft = {
   opening: string;
   explanation: string;
   example: string;
@@ -81,7 +94,13 @@ export type TutorLessonInput = {
   skill: PersistedSkill;
   lesson: CourseOutlineDraft["lessons"][number];
   mastery: { score: number; confidence: number };
+  diagnosticEvidence?: Array<{ skillId: string; score: number; confidence: number; summary: string }>;
+  previousLessonEvidence?: Array<{ lessonId: string; score: number; summary: string }>;
 };
 
 export type TutorCheckInput = TutorLessonInput & { material: LessonMaterialDraft };
-export type TutorGradeInput = TutorCheckInput & { questions: AuthoredCourseQuestion[]; answers: Record<string, string> };
+export type TutorGradeInput = TutorLessonInput & {
+  material: LessonMaterialDraft | LegacyLessonMaterialDraft;
+  questions: AuthoredCourseQuestion[];
+  answers: Record<string, string>;
+};

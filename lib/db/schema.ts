@@ -1,4 +1,4 @@
-export const DATABASE_SCHEMA_VERSION = 5;
+export const DATABASE_SCHEMA_VERSION = 7;
 
 /**
  * 给已存在的表加列：`CREATE TABLE IF NOT EXISTS` 对已建好的表会整条跳过，
@@ -14,6 +14,15 @@ export const COLUMN_ADDITIONS: Array<{ table: string; column: string; ddl: strin
   { table: "diagnostic_assessments", column: "max_questions", ddl: "ALTER TABLE diagnostic_assessments ADD COLUMN max_questions INTEGER NOT NULL DEFAULT 8" },
   { table: "diagnostic_assessments", column: "answered_count", ddl: "ALTER TABLE diagnostic_assessments ADD COLUMN answered_count INTEGER NOT NULL DEFAULT 0" },
   { table: "diagnostic_assessments", column: "adaptive_state_json", ddl: "ALTER TABLE diagnostic_assessments ADD COLUMN adaptive_state_json TEXT NOT NULL DEFAULT '{}'" },
+  { table: "goal_skills", column: "capability_type", ddl: "ALTER TABLE goal_skills ADD COLUMN capability_type TEXT NOT NULL DEFAULT 'conceptual_understanding'" },
+  { table: "course_lessons", column: "current_content_version_id", ddl: "ALTER TABLE course_lessons ADD COLUMN current_content_version_id TEXT" },
+  { table: "course_lessons", column: "source_status", ddl: "ALTER TABLE course_lessons ADD COLUMN source_status TEXT NOT NULL DEFAULT 'unverified'" },
+  { table: "course_lessons", column: "quality_status", ddl: "ALTER TABLE course_lessons ADD COLUMN quality_status TEXT NOT NULL DEFAULT 'legacy'" },
+  { table: "course_lessons", column: "capability_type", ddl: "ALTER TABLE course_lessons ADD COLUMN capability_type TEXT NOT NULL DEFAULT 'conceptual_understanding'" },
+  { table: "course_lessons", column: "prerequisites_json", ddl: "ALTER TABLE course_lessons ADD COLUMN prerequisites_json TEXT NOT NULL DEFAULT '[]'" },
+  { table: "course_lessons", column: "completion_evidence_json", ddl: "ALTER TABLE course_lessons ADD COLUMN completion_evidence_json TEXT NOT NULL DEFAULT '[]'" },
+  { table: "lesson_assessment_attempts", column: "content_version_id", ddl: "ALTER TABLE lesson_assessment_attempts ADD COLUMN content_version_id TEXT" },
+  { table: "lesson_assessment_attempts", column: "questions_json", ddl: "ALTER TABLE lesson_assessment_attempts ADD COLUMN questions_json TEXT NOT NULL DEFAULT '[]'" },
 ];
 
 export const DATABASE_SCHEMA = `
@@ -120,6 +129,20 @@ export const DATABASE_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_ledger_user_time ON ledger_entries(user_id, created_at DESC);
 
+  CREATE TABLE IF NOT EXISTS user_learning_profiles (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    weekday_minutes_json TEXT NOT NULL DEFAULT '[0,0,0,0,0,0,0]',
+    sustainable_weekly_minutes INTEGER NOT NULL DEFAULT 2400
+      CHECK (sustainable_weekly_minutes BETWEEN 60 AND 10080),
+    preferred_period TEXT NOT NULL DEFAULT 'evening'
+      CHECK (preferred_period IN ('morning', 'daytime', 'evening', 'late_night', 'flexible')),
+    preferred_session TEXT NOT NULL DEFAULT 'standard'
+      CHECK (preferred_session IN ('fragment', 'standard', 'long')),
+    habit_note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TABLE IF NOT EXISTS goal_learning_profiles (
     goal_id TEXT PRIMARY KEY REFERENCES goals(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -144,6 +167,7 @@ export const DATABASE_SCHEMA = `
     description TEXT NOT NULL DEFAULT '',
     target_level INTEGER NOT NULL DEFAULT 3 CHECK (target_level BETWEEN 1 AND 5),
     weight REAL NOT NULL DEFAULT 1.0 CHECK (weight > 0 AND weight <= 10),
+    capability_type TEXT NOT NULL DEFAULT 'conceptual_understanding' CHECK (capability_type IN ('conceptual_understanding', 'procedural_skill', 'problem_solving', 'expression_communication', 'retrieval_discrimination', 'integrated_creation')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
     source TEXT NOT NULL DEFAULT 'agent' CHECK (source IN ('agent', 'user', 'system')),
     created_at TEXT NOT NULL,
@@ -224,6 +248,12 @@ export const DATABASE_SCHEMA = `
     generation_mode TEXT NOT NULL DEFAULT 'llm' CHECK (generation_mode IN ('llm', 'demo', 'manual')),
     generation_status TEXT NOT NULL DEFAULT 'ready' CHECK (generation_status IN ('planned', 'generating', 'ready', 'failed')),
     difficulty INTEGER NOT NULL DEFAULT 3 CHECK (difficulty BETWEEN 1 AND 5),
+    current_content_version_id TEXT,
+    source_status TEXT NOT NULL DEFAULT 'unverified' CHECK (source_status IN ('unverified', 'partially_grounded', 'grounded')),
+    quality_status TEXT NOT NULL DEFAULT 'legacy' CHECK (quality_status IN ('legacy', 'pending', 'passed', 'failed')),
+    capability_type TEXT NOT NULL DEFAULT 'conceptual_understanding' CHECK (capability_type IN ('conceptual_understanding', 'procedural_skill', 'problem_solving', 'expression_communication', 'retrieval_discrimination', 'integrated_creation')),
+    prerequisites_json TEXT NOT NULL DEFAULT '[]',
+    completion_evidence_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(program_id, position)
@@ -231,6 +261,63 @@ export const DATABASE_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_course_lessons_program ON course_lessons(program_id, position);
   CREATE INDEX IF NOT EXISTS idx_course_lessons_skill ON course_lessons(primary_skill_id, status);
+
+  CREATE TABLE IF NOT EXISTS lesson_content_versions (
+    id TEXT PRIMARY KEY,
+    lesson_id TEXT NOT NULL REFERENCES course_lessons(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL CHECK (version >= 1),
+    schema_version TEXT NOT NULL DEFAULT '1',
+    content_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ready', 'generation_failed', 'quality_failed', 'source_insufficient')),
+    source_status TEXT NOT NULL DEFAULT 'unverified' CHECK (source_status IN ('unverified', 'partially_grounded', 'grounded')),
+    generation_mode TEXT NOT NULL CHECK (generation_mode IN ('llm', 'rules', 'manual', 'repaired')),
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    input_hash TEXT NOT NULL DEFAULT '',
+    prompt_tokens INTEGER NOT NULL DEFAULT 0 CHECK (prompt_tokens >= 0),
+    completion_tokens INTEGER NOT NULL DEFAULT 0 CHECK (completion_tokens >= 0),
+    total_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+    latency_ms INTEGER NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
+    fallback_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(lesson_id, version)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_lesson_content_versions_lesson ON lesson_content_versions(lesson_id, version DESC);
+  CREATE INDEX IF NOT EXISTS idx_lesson_content_versions_status ON lesson_content_versions(status, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS lesson_quality_reports (
+    id TEXT PRIMARY KEY,
+    lesson_content_version_id TEXT NOT NULL REFERENCES lesson_content_versions(id) ON DELETE CASCADE,
+    deterministic_passed INTEGER NOT NULL CHECK (deterministic_passed IN (0, 1)),
+    semantic_passed INTEGER NOT NULL CHECK (semantic_passed IN (0, 1)),
+    score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+    issues_json TEXT NOT NULL DEFAULT '[]',
+    checker_version TEXT NOT NULL,
+    checker_mode TEXT NOT NULL CHECK (checker_mode IN ('llm', 'rules')),
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_tokens INTEGER NOT NULL DEFAULT 0 CHECK (prompt_tokens >= 0),
+    completion_tokens INTEGER NOT NULL DEFAULT 0 CHECK (completion_tokens >= 0),
+    total_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+    latency_ms INTEGER NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
+    created_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_lesson_quality_reports_version ON lesson_quality_reports(lesson_content_version_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS lesson_block_sources (
+    lesson_content_version_id TEXT NOT NULL REFERENCES lesson_content_versions(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    source_snapshot_hash TEXT NOT NULL DEFAULT '',
+    support_type TEXT NOT NULL DEFAULT 'supports' CHECK (support_type IN ('supports', 'contradicts', 'example')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (lesson_content_version_id, block_id, source_ref)
+  ) WITHOUT ROWID, STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_lesson_block_sources_ref ON lesson_block_sources(source_ref);
 
   CREATE TABLE IF NOT EXISTS task_lesson_links (
     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
@@ -337,6 +424,8 @@ export const DATABASE_SCHEMA = `
     grader_mode TEXT NOT NULL DEFAULT 'pending' CHECK (grader_mode IN ('pending', 'llm', 'rules', 'manual')),
     provider TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
+    content_version_id TEXT,
+    questions_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     submitted_at TEXT,
     UNIQUE(lesson_id, user_id, attempt_number)

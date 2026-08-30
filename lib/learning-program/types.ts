@@ -1,5 +1,115 @@
 export type CourseQuestionKind = "理解" | "迁移" | "教回";
 
+export type CapabilityType =
+  | "conceptual_understanding"
+  | "procedural_skill"
+  | "problem_solving"
+  | "expression_communication"
+  | "retrieval_discrimination"
+  | "integrated_creation";
+
+export type EvidenceType =
+  | "explanation"
+  | "discrimination"
+  | "procedure"
+  | "problem_solution"
+  | "transfer"
+  | "artifact";
+
+export type SourceStatus = "unverified" | "partially_grounded" | "grounded";
+export type LessonQualityStatus = "legacy" | "pending" | "passed" | "failed";
+
+type LearningBlockBase = {
+  id: string;
+  title: string;
+  objectiveIds: string[];
+};
+
+export type NarrativeLearningBlock = LearningBlockBase & {
+  type: "explanation" | "concept_relation" | "comparison" | "case_study" | "common_mistake" | "boundary" | "reflection" | "summary";
+  body: string;
+  points: string[];
+};
+
+export type WorkedExampleLearningBlock = LearningBlockBase & {
+  type: "worked_example" | "demonstration" | "code_lab";
+  scenario: string;
+  steps: string[];
+  result: string;
+  verification: string;
+};
+
+export type PracticeLearningBlock = LearningBlockBase & {
+  type: "guided_practice" | "retrieval_practice" | "speaking_practice";
+  prompt: string;
+  hints: string[];
+  completionCriteria: string[];
+};
+
+export type LearningBlock = NarrativeLearningBlock | WorkedExampleLearningBlock | PracticeLearningBlock;
+
+export type EvidenceRequirement = {
+  id: string;
+  objectiveId: string;
+  type: EvidenceType;
+  description: string;
+  successCriteria: string[];
+};
+
+export type LessonContentOutput = {
+  schemaVersion: "1";
+  contentVersionId: string;
+  lessonId: string;
+  skillId: string;
+  title: string;
+  objective: string;
+  capabilityType: CapabilityType;
+  estimatedMinutes: number;
+  blocks: LearningBlock[];
+  evidenceRequirements: EvidenceRequirement[];
+  sourceStatus: SourceStatus;
+  sourceRefs: string[];
+  modelSummary: string;
+};
+
+export type LessonQualityIssue = {
+  code: string;
+  severity: "error" | "warning";
+  blockIds: string[];
+  message: string;
+  repairInstruction: string;
+};
+
+export type LessonQualityReport = {
+  deterministicPassed: boolean;
+  semanticPassed: boolean;
+  score: number;
+  issues: LessonQualityIssue[];
+  checkerVersion: string;
+  checkedAt: string;
+  mode: "llm" | "rules";
+  provider: string;
+  model: string;
+};
+
+export type LessonContentVersionDraft = {
+  content: LessonContentOutput;
+  status: "ready" | "generation_failed" | "quality_failed" | "source_insufficient";
+  qualityReport: LessonQualityReport;
+  generation: {
+    mode: "llm" | "rules";
+    provider: string;
+    model: string;
+    promptVersion: string;
+    inputHash: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    latencyMs: number;
+    fallbackReason: string;
+  };
+};
+
 export type LessonStatus = "locked" | "available" | "in_progress" | "passed" | "archived";
 export type LessonGenerationStatus = "planned" | "generating" | "ready" | "failed";
 export type LessonGenerationMode = "llm" | "demo" | "manual";
@@ -9,6 +119,10 @@ export type CourseQuestion = {
   id: string;
   skillId: string;
   kind: CourseQuestionKind;
+  contentVersionId?: string;
+  taughtBlockIds?: string[];
+  evidenceType?: EvidenceType;
+  expectedConcepts?: string[];
   prompt: string;
   hint: string;
   maxScore: number;
@@ -39,11 +153,21 @@ export type CourseLesson = {
   difficulty: number;
   generationStatus: LessonGenerationStatus;
   generationMode: LessonGenerationMode;
+  capabilityType?: CapabilityType;
+  prerequisites?: string[];
+  completionEvidence?: string[];
+  blocks?: LearningBlock[];
+  contentVersionId?: string;
+  sourceStatus?: SourceStatus;
+  qualityStatus?: LessonQualityStatus;
+  legacyContent?: boolean;
   questions: CourseQuestion[];
 };
 
 export type AuthoredCourseLesson = Omit<CourseLesson, "questions"> & {
   questions: AuthoredCourseQuestion[];
+  contentVersion?: LessonContentVersionDraft | null;
+  contentVersions?: LessonContentVersionDraft[];
 };
 
 export type CourseInstructor = {

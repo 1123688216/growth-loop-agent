@@ -1,6 +1,8 @@
 import { getCurrentUser } from "@/lib/auth/session";
 import { createGoalWithProfile, deleteGoal, SELF_LEVELS, type SelfLevel } from "@/lib/db/goals";
+import { readActiveAllocations, readUserLearningProfile } from "@/lib/db/user-profile";
 import { horizonLabel, isValidTargetDate } from "@/lib/goal-schedule";
+import { reviewBudget } from "@/lib/learning-budget";
 
 export const runtime = "nodejs";
 
@@ -45,6 +47,17 @@ export async function POST(request: Request) {
   }
 
   const targetDate = requestedDate || null;
+
+  // 跨目标总量检查：单个目标各自看都合理，加起来未必。只警告，不阻止创建。
+  const userProfile = readUserLearningProfile(user.id);
+  const budgetReview = userProfile
+    ? reviewBudget({
+      profile: userProfile,
+      allocations: readActiveAllocations(user.id),
+      incoming: { title, weeklyMinutes: weeklyHours * 60 },
+    })
+    : null;
+
   const { goal, profile } = createGoalWithProfile({
     userId: user.id,
     title,
@@ -57,7 +70,7 @@ export async function POST(request: Request) {
     background,
   });
 
-  return Response.json({ goal, profile }, { status: 201 });
+  return Response.json({ goal, profile, budgetReview }, { status: 201 });
 }
 
 export async function DELETE(request: Request) {

@@ -174,8 +174,17 @@ assert(replayedDiagnostic.grade.score === diagnosed.grade.score, "重复提交�
 void diagnosed.program;
 }
 assert(course?.programId, "课程没有返回 programId");
-assert(Array.isArray(course.lessons) && course.lessons.length >= 5, "课程章节不足 5 节");
+assert(Array.isArray(course.lessons) && course.lessons.length > 5, `长周期高投入目标应生成超过 5 节课程，实际 ${course.lessons?.length}`);
 assert(course.lessons[0].generationStatus === "ready" && course.lessons[0].questions?.length === 3, "首节课程没有完整生成");
+assert(course.lessons[0].qualityStatus === "passed", "首节课程没有通过 V0.4.3 教学质量门禁");
+assert(course.lessons[0].sourceStatus === "unverified", "未接入 RAG 的 Demo 课程没有明确标记为 unverified");
+assert(course.lessons[0].legacyContent === false, "V0.4.3 新课程被错误标记成旧版正文");
+assert(course.lessons[0].blocks?.length >= 5, "首节课程没有返回结构化 LearningBlock");
+const publishedBlockIds = new Set(course.lessons[0].blocks.map((block) => block.id));
+assert(course.lessons[0].questions.every((question) => question.contentVersionId === course.lessons[0].contentVersionId), "课后题没有绑定当前课程内容版本");
+assert(course.lessons[0].questions.every((question) => question.taughtBlockIds?.length > 0), "课后题缺少 taughtBlockIds");
+assert(course.lessons[0].questions.every((question) => question.taughtBlockIds.every((id) => publishedBlockIds.has(id))), "课后题引用了不存在的教学块");
+assert(course.lessons[0].questions.every((question) => question.expectedConcepts?.length > 0), "课后题缺少预期概念证据");
 assert(course.lessons.slice(1).every((lesson) => lesson.generationStatus === "planned" && lesson.questions.length === 0), "后续章节不应提前生成正文和题目");
 assert(course.instructor?.name && course.instructor?.openingMessage, "缺少 AI 讲师设定");
 assert(
@@ -235,6 +244,8 @@ assert(first.passed, `高质量答案应通过首节评测，实际 ${first.scor
 assert(first.mastery?.evidenceCount >= 2, "课后评测没有在诊断证据上继续更新能力掌握度");
 const nextLesson = firstResult.program?.lessons?.[1];
 assert(nextLesson?.generationStatus === "ready", "首节通过后没有按需生成下一节正文");
+assert(nextLesson?.qualityStatus === "passed" && nextLesson.blocks?.length >= 5, "下一节没有经过结构化课程质量门禁");
+assert(nextLesson.questions.every((question) => question.taughtBlockIds?.length > 0), "下一节题目没有绑定教学块");
 assert(nextLesson.difficulty === Math.min(5, course.lessons[1].difficulty + 1), "高分后下一节难度没有按规则上调");
 
 const { data: dashboardAfterPass } = await call("/api/dashboard");
@@ -266,6 +277,10 @@ const { goal: beginnerGoal } = await post("/api/goals", {
 const beginnerPrepared = await post("/api/learning-program", { action: "prepare", goalId: beginnerGoal.id });
 assert(beginnerPrepared.preparation?.nextAction === "course", "初学者不应被强制送入初始诊断");
 assert(beginnerPrepared.preparation.program?.lessons?.[0]?.generationStatus === "ready", "初学者首节没有生成");
+assert(
+  beginnerPrepared.preparation.program.lessons.length < course.lessons.length,
+  "课程规模没有随目标周期和每周投入动态变化",
+);
 const { data: multiGoalDashboard } = await call("/api/dashboard");
 const familiarGoalState = multiGoalDashboard.goals.find((item) => item.id === goal.id);
 const beginnerGoalState = multiGoalDashboard.goals.find((item) => item.id === beginnerGoal.id);

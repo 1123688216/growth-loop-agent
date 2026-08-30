@@ -2,6 +2,9 @@
   "name": "growth-loop-agent",
   "version": "0.2.0-prototype",
   "private": true,
+  "engines": {
+    "node": "22.x || 24.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +12,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:validate": "node --experimental-strip-types scripts/validate-database-schema.mjs",
+    "budget:check": "node --experimental-strip-types scripts/budget-check.mjs",
     "learning:smoke": "node scripts/learning-program-smoke.mjs",
+    "learning:quality": "node scripts/v043-quality-smoke.mjs",
+    "learning:probe": "node scripts/topic-probe.mjs",
     "android:status": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action status",
     "android:debug": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action run -Build",
     "android:run": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/android-emulator.ps1 -Action run",

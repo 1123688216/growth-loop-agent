@@ -248,7 +248,14 @@ export async function gradeDiagnostic(input: { questions: Array<DiagnosticQuesti
   });
   const skillScores = Object.fromEntries([...grouped].map(([skillId, value]) => [skillId, Math.round(value.score / Math.max(1, value.max) * 100)]));
   return summarizeAdaptiveDiagnostic({
-    skills: [...new Set(input.questions.map((question) => question.skillId))].map((id) => ({ id, name: id, description: "", targetLevel: 3, weight: 1 })),
+    skills: [...new Set(input.questions.map((question) => question.skillId))].map((id) => ({
+      id,
+      name: id,
+      description: "",
+      targetLevel: 3,
+      weight: 1,
+      capabilityType: "conceptual_understanding" as const,
+    })),
     skillScores,
     responses: input.questions.map((question, index) => ({ questionId: question.id, skillId: question.skillId, score: feedback[index].score, maxScore: feedback[index].maxScore, feedback: feedback[index].feedback })),
   });
