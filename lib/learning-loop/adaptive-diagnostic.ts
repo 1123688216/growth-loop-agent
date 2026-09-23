@@ -18,7 +18,8 @@ import {
   updateAdaptiveBoundary,
 } from "@/lib/learning-loop/adaptive";
 import { generateCourseForGoal } from "@/lib/learning-loop/service";
-import type { DiagnosticQuestionResult } from "@/lib/learning-program/types";
+import type { LearningPreparationReporter } from "@/lib/learning-loop/service";
+import type { DiagnosticQuestionResult, LearningProgram } from "@/lib/learning-program/types";
 
 export type DiagnosticProgress = {
   stage: "load_evidence" | "grade_answer" | "update_bounds" | "generate_question" | "summarize" | "persist" | "course";
@@ -38,14 +39,18 @@ export async function answerAdaptiveDiagnostic(input: {
   questionId: string;
   answer: string;
   reporter?: DiagnosticProgressReporter;
+  courseBuilder?: (goalId: string, reporter?: LearningPreparationReporter) => Promise<LearningProgram>;
 }) {
+  const buildCourse = input.courseBuilder
+    ? input.courseBuilder
+    : (goalId: string, reporter?: LearningPreparationReporter) => generateCourseForGoal(input.userId, goalId, undefined, reporter);
   await report(input.reporter, { stage: "load_evidence", percent: 5, message: "正在读取本题、历史证据和能力边界" });
   const found = readAuthoredDiagnostic(input.userId, input.assessmentId);
   if (!found) throw new Error("找不到这次诊断。");
   if (!found.assessment.adaptive) throw new Error("这是一份旧版诊断，请从目标卡片重新开始诊断。");
   if (found.assessment.status === "completed") {
     const grade = readDiagnosticResult(input.userId, input.assessmentId);
-    const program = await generateCourseForGoal(input.userId, found.assessment.goalId);
+    const program = await buildCourse(found.assessment.goalId);
     if (!grade) throw new Error("诊断已完成，但结果暂时无法读取。");
     await report(input.reporter, { stage: "course", percent: 100, message: "诊断结果和课程已恢复" });
     return { complete: true as const, grade, program, replayed: true };
@@ -175,7 +180,7 @@ export async function answerAdaptiveDiagnostic(input: {
   });
 
   await report(input.reporter, { stage: "course", percent: 68, message: "能力基线已确定，正在生成课程骨架和首课" });
-  const program = await generateCourseForGoal(input.userId, found.assessment.goalId, undefined, async (progress) => {
+  const program = await buildCourse(found.assessment.goalId, async (progress) => {
     await report(input.reporter, {
       stage: "course",
       percent: Math.min(98, 68 + Math.round(progress.percent * .3)),

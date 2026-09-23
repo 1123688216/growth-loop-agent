@@ -1,7 +1,12 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { COLUMN_ADDITIONS, DATABASE_SCHEMA, DATABASE_SCHEMA_VERSION } from "./schema";
+import {
+  KNOWLEDGE_CHUNK_INDEX_SCHEMA,
+  migrateKnowledgeChunkSchema,
+  rebuildKnowledgeChunkFts,
+} from "./knowledge-schema.ts";
+import { COLUMN_ADDITIONS, DATABASE_SCHEMA, DATABASE_SCHEMA_VERSION } from "./schema.ts";
 
 type GlobalWithDatabase = typeof globalThis & {
   growthLoopDatabase?: DatabaseSync;
@@ -28,8 +33,11 @@ function openDatabase() {
   mkdirSync(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  const migratedKnowledgeChunks = migrateKnowledgeChunkSchema(database);
   database.exec(DATABASE_SCHEMA);
   applyColumnAdditions(database);
+  database.exec(KNOWLEDGE_CHUNK_INDEX_SCHEMA);
+  if (migratedKnowledgeChunks) rebuildKnowledgeChunkFts(database);
   database
     .prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
     .run(DATABASE_SCHEMA_VERSION, new Date().toISOString());

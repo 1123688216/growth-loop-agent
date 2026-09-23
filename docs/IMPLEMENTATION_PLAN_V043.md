@@ -4,6 +4,7 @@
 > 更新日期：2026-08-30  
 > 适用范围：桌面端 Web；移动端继续暂停  
 > 上游约束：[V1 实施方案](IMPLEMENTATION_PLAN_V1.md)、[V0.4.2 当前实现基线](IMPLEMENTATION_PLAN_V042.md)、[Agent 角色与信息边界](AGENT_ROLES.md)
+> 后续顺序修订：本文实现阶段没有引入框架；最小 LangGraph/Pydantic AI 课程主图现已提前到 V0.4.4 的目标范围 RAG Tool 之后、Tutor 证据改造之前，见 [V0.4.4 子方案](IMPLEMENTATION_PLAN_V044_GROUNDED_TEACHING.md)。
 
 ## 0. 2026-08-30 实现快照
 
@@ -18,7 +19,7 @@
 
 2026-08-30 已落地 **V0.4.3.1 的基础课件阅读器**：结构化新课一次只渲染一个教学块，支持页码、进度点、按钮/键盘翻页、交付物页、独立考核页，以及按 `lessonId + contentVersionId` 在浏览器恢复最后阅读页。考核页关闭导师问答，避免一边答题一边直接索要讲解。
 
-本次实现没有把整份冻结设计冒充成已完成：当前 Tutor 请求仍只携带课节上下文，没有携带当前 `blockId`；困惑标注、重点收藏、选区校验、交互块作答、`open_book`、历史标注回放和长代码全屏仍未实现。V0.4.3 核心数据模型在数据库 V6 落地；项目后续学习作息改动已占用数据库 V7，V0.4.4 的可信来源/RAG 将使用 V8，因此本文尚未实现的课堂标注迁移统一顺延为 V9。
+本次实现没有把整份冻结设计冒充成已完成：当前 Tutor 请求仍只携带课节上下文，没有携带当前 `blockId`；困惑标注、重点收藏、选区校验、交互块作答、`open_book`、历史标注回放和长代码全屏仍未实现。V0.4.3 核心数据模型在数据库 V6 落地；项目后续学习作息改动已占用数据库 V7，V0.4.4 的资料库与结构化父子切片已使用 V8/V9，因此本文尚未实现的课堂标注迁移统一顺延为 V10。
 
 ## 1. 版本结论
 
@@ -134,7 +135,7 @@ V0.4.3 要把“写一段课程正文”改造成“生成、检查、修复、�
 6. **权威学习状态只由 Next.js 在数据库事务内更新。**LLM 只能返回建议和结构化产物。
 7. **生成失败必须可见。**禁止把通用本地模板标记为 AI 正式课程。
 8. **旧数据只做兼容读取。**不能把旧 Markdown 按标题机械切分后冒充通过质量门禁的 `LearningBlock`。
-9. **V0.4.3 仍使用 TypeScript 契约。**所有函数保持节点化边界，为 V0.4.5 迁移 Pydantic AI/LangGraph 做准备，但本版本不提前迁移。
+9. **V0.4.3 仍使用 TypeScript 契约。**所有函数保持节点化边界；本版本当时没有迁移框架，这些边界将在 V0.4.4 最小课程主图中转成 Pydantic AI/LangGraph。
 
 ---
 
@@ -590,7 +591,7 @@ generateLessonCheck
 validateLessonCheckGrounding
 ```
 
-每个函数使用明确输入输出，禁止直接依赖整个数据库对象。V0.4.5 可以把这些边界一一迁移为 Pydantic 模型和 LangGraph 节点，而不重写业务契约。
+每个函数使用明确输入输出，禁止直接依赖整个数据库对象。V0.4.4 最小课程主图可以把这些边界一一迁移为 Pydantic 模型和 LangGraph 节点，而不重写业务契约。
 
 ### 12.2 进度事件
 
@@ -741,7 +742,7 @@ type ContextualTutorQuestion = {
 
 收藏是用户整理资料的行为，不增加 XP、不更新掌握度，也不替代主动回忆和形成性考核。
 
-### 13.7 标注数据契约（拟定数据库 V9）
+### 13.7 标注数据契约（拟定数据库 V10）
 
 V0.4.3.1 拟新增统一的 `lesson_annotations` 表，而不是为困惑和收藏分别建表：
 
@@ -784,7 +785,7 @@ POST   /api/learning-annotations        创建或更新困惑/收藏
 DELETE /api/learning-annotations?id=    删除当前用户的标注
 ```
 
-数据库 V9 同时包含 §13.11 决定的开卷标记：
+数据库 V10 同时包含 §13.11 决定的开卷标记：
 
 ```sql
 ALTER TABLE lesson_assessment_attempts ADD COLUMN open_book INTEGER NOT NULL DEFAULT 0;
@@ -882,7 +883,7 @@ result          评分结果与下一步              1 页
 - 逐次记录，不是逐课节记录：同一节的重测可以是闭卷，两次尝试各自独立标记；
 - **本版本不改变掌握度公式**。`openBook` 先作为事实记录下来；要不要给它降权，得先有数据，没有样本就调权重只是换一种拍脑袋。
 
-数据库影响：`lesson_assessment_attempts` 增加一列，与 §13.7 的标注表同属数据库 V9。当前项目的 V7 用于学习作息/容量配置，V8 预留给 V0.4.4 可信来源/RAG；两者都不包含 `lesson_annotations` 或 `open_book`。按[开发者手册 §3.4](DEVELOPER_HANDBOOK.md) 的规则，加列必须**同时**写进 `DATABASE_SCHEMA` 的建表语句和 `COLUMN_ADDITIONS`；且通过 `ALTER` 补的列拿不到 CHECK 约束，取值合法性要在应用层再校验一次。
+数据库影响：`lesson_assessment_attempts` 增加一列，与 §13.7 的标注表同属数据库 V10。当前项目的 V7 用于学习作息/容量配置，V8/V9 用于 V0.4.4 资料库与结构化父子切片；这些版本都不包含 `lesson_annotations` 或 `open_book`。按[开发者手册 §3.4](DEVELOPER_HANDBOOK.md) 的规则，加列必须**同时**写进 `DATABASE_SCHEMA` 的建表语句和 `COLUMN_ADDITIONS`；且通过 `ALTER` 补的列拿不到 CHECK 约束，取值合法性要在应用层再校验一次。
 
 ```sql
 -- 建表语句与 COLUMN_ADDITIONS 两处都要有
@@ -915,7 +916,7 @@ open_book INTEGER NOT NULL DEFAULT 0    -- 0/1；老库经 ALTER 补列时没有
 3. **实现每种教学块的页面骨架（§13.9）**，先覆盖软件开发策略实际会产出的块类型，其余按需补齐；
 4. **实现三种交互块的揭示规则（§13.10）**；
 5. 将现有 Tutor 提问改成上下文抽屉；
-6. 数据库升级到 V9：新建 `lesson_annotations`，并给 `lesson_assessment_attempts` 加 `open_book`；
+6. 数据库升级到 V10：新建 `lesson_annotations`，并给 `lesson_assessment_attempts` 加 `open_book`；
 7. 加入选区标注、本课标记列表和历史版本回放；
 8. 补充生成中、`quality_failed`、`mixed` 与旧版课程的降级显示（§13.11）；
 9. 补充刷新恢复、权限、键盘、减少动态效果和长代码回归。
@@ -1152,7 +1153,8 @@ V0.4.3 只有同时满足以下条件才算完成：
 |---|---|---|
 | V0.4.3 | 通用课程内容引擎与质量门禁 | 本文范围 |
 | V0.4.4 | [私有资料 RAG 与可追溯教学来源](IMPLEMENTATION_PLAN_V044.md) | 先用 FTS5 为教学块和题目补充固定来源；Embedding、URL 与联网按子版本加入 |
-| V0.4.5 | Pydantic AI + LangGraph | 迁移已经稳定的结构化契约和节点边界 |
+| V0.4.4 编排阶段 | Pydantic AI + LangGraph 最小课程主图 | 在 Tutor 证据改造前迁移已经稳定的结构化契约和节点边界 |
+| V0.4.5 | 工作流扩展与加固 | 补课、间隔复习、并发与 checkpoint 生命周期 |
 | V0.5 | 补课循环、阶段大考、模拟面试、毕业门禁 | 使用高质量课程和可信证据推进正式考核 |
 
 正确顺序是：

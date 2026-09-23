@@ -1,10 +1,17 @@
 # V0.4.4 实施方案：私有资料 RAG 与可追溯教学来源
 
-> 状态：**设计冻结，尚未修改 V0.4.4 业务代码**  
-> 更新日期：2026-08-30  
+> 最新增量：Schema V14，独立 web-research LangGraph 主流程接入 Pydantic AI 查询规划/候选推荐，Next.js 执行搜索与收录；支持用户选择中断与恢复。默认 DeepSeek 原生搜索，正文提取仍需 Tavily。两轮预算仅限制外层请求。验证为隔离和模拟测试，真实模型质量尚未验证。此状态覆盖下方历史描述。
+
+> 2026-09-07 联网增量：Schema V13，目标资料范围支持 Tavily 搜索候选、用户选中后抓取正文并统一入库/绑定/向量化；具体实现和未完成项见子方案阶段 F。此处更新覆盖下方历史 Schema V12 状态。
+
+> 状态：**个人资料库、Schema V12、解析分块、Embedding、目标级 RAG Tool 与可恢复编排 MVP 已实现；2026-09-07 接入 Tutor 证据生成/复核/修订、逐块引用与来源视图。阶段 D 尚待策略目录、概念覆盖和真实模型质量验证，题目来源链尚未完成。**
+
+> 编码前子方案：目标资料绑定、本地检索 Tool、LangGraph/Pydantic AI 最小编排层、证据驱动课程与题目、固定评分，以及联网资料补充的统一实施顺序，见 [IMPLEMENTATION_PLAN_V044_GROUNDED_TEACHING.md](IMPLEMENTATION_PLAN_V044_GROUNDED_TEACHING.md)。后续阶段 C-H 的实现以该子方案为直接契约，本文件保留 V0.4.4 总体范围和历史设计。
+> 更新日期：2026-09-01
 > 适用范围：桌面端 Web；移动端继续暂停  
-> 数据库版本：**Schema V8**  
+> 数据库版本：**Schema V12**
 > 上游约束：[V1 实施方案](IMPLEMENTATION_PLAN_V1.md)、[V0.4.3 当前实现基线](IMPLEMENTATION_PLAN_V043.md)、[Agent 角色与信息边界](AGENT_ROLES.md)
+> 总体架构：[RAG.MD](RAG.MD) 冻结上传、URL、联网搜索、结构解析、父子切片、不可变 ChunkSet 与教学证据的统一关系；本文继续负责 V0.4.4 的版本范围和阶段验收。若早期设计与总体架构冲突，以当前代码事实和 `RAG.MD` 的目标关系为准，并先更新文档再实施迁移。
 
 ## 0. 版本结论
 
@@ -36,7 +43,67 @@ V0.4.4 只解决一个核心问题：
 → 使用同一来源快照评分
 ```
 
-V0.4.4 核心版不追求“全网知识库”。首版只完成私有资料、确定性 FTS5 检索和可追溯教学闭环。Embedding、用户指定 URL、官方联网搜索和开放网络搜索按子版本逐步加入。
+V0.4.4 不追求“全网知识库”。当前已经完成私有资料、FTS5、文本 Embedding 和资料级向量检索底座；接下来先完成目标范围 Tool 与可恢复课程编排，再完成可追溯教学闭环。用户指定 URL、官方联网搜索和开放网络搜索继续放在本地闭环之后。
+
+### 0.1 2026-09-01 当前实现切片
+
+资料导入阶段先完成了个人资料库；后续阶段已经增加目标范围、RAG Tool 与可恢复编排，但还没有把资料证据正文喂给 Tutor：
+
+```text
+用户上传 TXT / PDF / DOCX，或粘贴文本
+→ 服务端校验类型与安全边界
+→ 统一 ingestion 入口
+├─ TypeScript 回退：本地解析和 structure-parent-child-v2
+└─ Python 成熟路径：MinerU V2 / Markdown → LlamaIndex HierarchicalNodeParser
+→ 统一映射为 ExtractedDocument + SourceChunkSetDraft
+→ 生成不可变 ParseRun、ChunkSet、Parent 和 Child
+→ 全部成功后原子切换 active ChunkSet
+→ FTS5 触发器建立索引
+→ 资料库展示状态、重新切片和父子查看器
+```
+
+当前已经实现：
+
+- 计划页“个人资料库”入口，不新增一级导航；
+- 上传时可填写资料说明，记录资料内容、学习目的和重点范围；
+- 粘贴文本，以及 TXT、PDF、DOCX 上传；
+- 当前不设固定文件大小、抽取字符数或分块数量上限，同时拦截重复内容；
+- TXT 的 UTF-8 与 GB18030 解码；
+- PDF 逐页文本提取，文本不足时标记 `ocr_required`；
+- DOCX 通过 Mammoth 受控转换为 HTML，再转成规范化 Markdown，保留标题、段落、列表、代码与表格文字，不执行宏或嵌入对象；
+- 默认 TypeScript 回退路径中的 PDF 继续使用 `pdf-parse`；本机 MinerU 3.4.5 GPU 服务已完成真实复杂 PDF 链路，配置 `MINERU_API_URL` 后，复杂版面、图片、公式和表格进入成熟路径；
+- PDF 普通正文会修复视觉软换行并优先按完整句末递归分割，“实验/示例/案例/练习/任务”等编号行作为子章节边界；仍无法替代 MinerU 对复杂版面的结构恢复；
+- 确定性结构分块、父子关系、章节路径、页码/字符范围、边界理由、哈希与 Token 估算；
+- 默认 Child 最小/目标/最大约 220/450/700 Token，Parent 最大约 2400 Token，不使用固定重叠；
+- Schema V8 的资料、版本、FTS5、目标关系、检索运行和题目来源底座，以及 Schema V9 的 ParseRun、DocumentNode、不可变 ChunkSet、Parent/Child；
+- 登录用户隔离的上传、列表和软删除 API；
+- “优化切片”创建新 ChunkSet，父/子查看器支持章节路径和切片策略；
+- 原文件二进制与抽取文本保存在 SQLite，不使用用户文件名拼接磁盘路径；
+- V8 → V9 迁移保留旧 Child ID，为旧资料生成 legacy Parent，并通过外键、完整性和幂等迁移回归。
+- 独立 Python ingestion 服务和 MinerU protocol v2 客户端，支持健康检查、异步任务、状态轮询、安全 ZIP 与 `content_list_v2.json` 结构映射；
+- LlamaIndex 0.14.24 `HierarchicalNodeParser` 两级 Parent/Child，默认 2048/512 Token 与官方默认 20 Token overlap，配置写入不可变 ChunkSet；
+- Next.js 上传与重新切片都可通过 `RAG_INGESTION_URL` 切换成熟路径；未配置或非强制模式失败时保留 TypeScript 回退；
+- Python 服务返回值经过 DTO、父子包含关系、位置、字符范围和 Token 门禁后才能写入结构化资料表；
+- 6 项 Python 回归覆盖 MinerU V2 结构、ZIP 安全、异步协议和 LlamaIndex 父子完整性，另完成 Python → Next.js HTTP 文本联调。
+- Schema V10 已增加 Embedding Profile/Run、Chunk Embedding、PipelineRun 和阶段耗时；
+- BGE-M3 与 Qwen3-Embedding-0.6B 已完成本地 GPU 向量化，资料级向量检索能够写入 RetrievalRun 快照。
+- Schema V11 已为目标学习画像增加 `auto / selected` 资料范围；长期目标卡片可自动使用全部个人资料、排除资料或严格指定资料；
+- 目标级 `search_knowledge_base` 已支持跨资料 FTS5/精确向量路由、Parent 去重、单资料上限、证据 Token 预算、来源不足状态、固定快照和阶段计时；
+- 同一 Tool 契约已区分 `lesson_generation / classroom_qa` 用途，Agent 可见输入不包含 `userId`、任意 Source ID 或文件路径。
+- Schema V12 已增加 `workflow_events`；Next.js 通过幂等外部动作执行 RAG Tool，LangGraph SQLite checkpoint 保存同一目标工作流的节点和 interrupt；
+- Pydantic AI 已用于生成结构化资料检索计划，未配置工作流 LLM 时由同一 Pydantic 模型验证确定性计划。
+
+当前仍未实现：
+
+- EvidenceBundle 作为 GroundedTutorContext 传入 Tutor，以及教学块来源绑定；
+- 课堂提问 UI 及其“当前教学块优先、当前课节其次、目标范围兜底”的查询改写；
+- 按 required concepts 执行的语义覆盖/冲突检查；当前只实现无资料、无命中和课节证据过少的基础门禁；
+- 教学块、题目、参考答案和 rubric 的真实 chunk 绑定；
+- 课程页引用抽屉与固定来源快照评分；
+- 课程质量修复循环的细粒度 Graph 节点，以及 Planner/Tutor/Examiner/Guard 全部迁为 Pydantic AI；
+- OCR 质量验收、LLM 边界辅助、URL 导入和联网搜索。
+
+因此当前版本可以称为“个人资料库、成熟解析/切片、Embedding、目标级 Agentic RAG Tool 与可恢复编排 MVP”。Tool 已在启用 workflow service 时进入课程生成前置检索，但证据尚未进入 Tutor 教学内容和块级引用门禁，仍不能称为“课程已经 grounded”。
 
 ---
 
@@ -108,11 +175,11 @@ AND
 
 - 不实现扫描 PDF OCR；
 - 不支持旧版 `.doc`、PPT、Excel、音频、视频或压缩包；
-- 不做 Embedding 和向量索引；
 - 不抓取用户指定 URL；
 - 不自动联网搜索；
 - 不做开放网络事实核查；
-- 不迁移 Pydantic AI 或 LangGraph；
+- 不对 Next.js、解析、切片、Embedding、检索、权限或数据库层做全量框架重写；
+- LangGraph/Pydantic AI 只迁移目标准备与课程生成主流程，不扩展到所有页面和普通 CRUD；
 - 不新增“RAG Agent”或“资料管理员 Agent”；
 - 不实现 V0.4.3.1 尚未完成的困惑标注、收藏和 `open_book`；
 - 不因为存在引用就宣称资料内容绝对正确；
@@ -122,10 +189,11 @@ AND
 
 | 子版本 | 范围 | 前置条件 |
 |---|---|---|
-| V0.4.4 | 私有文本/TXT/PDF/DOCX、FTS5、来源快照、课程与题目引用 | 本文核心范围 |
-| V0.4.4.1 | Embedding、混合检索、重排和 Recall@K 基线 | FTS5 固定集稳定 |
-| V0.4.4.2 | 用户指定 URL 导入、正文抓取和版本快照 | SSRF/重定向/体积限制完成 |
-| V0.4.4.3 | 官方来源定向搜索；开放网络搜索继续保持可选 | 来源质量评估和联网权限完成 |
+| V0.4.4 基础阶段 | 私有文本/TXT/PDF/DOCX、MinerU、父子切片、FTS5 | 已完成 |
+| V0.4.4 向量阶段 | Embedding Profile、BGE/Qwen、本地向量检索和阶段计时 | 已完成 MVP；混合检索、重排和 Recall@K 基线仍待后续 |
+| V0.4.4 编排阶段 | 目标资料 Tool、LangGraph checkpoint/interrupt、Pydantic AI 结构化节点 | 目标绑定和 EvidenceBundle 契约稳定 |
+| V0.4.4 教学阶段 | 来源课程、来源题目、固定快照评分和引用 UI | 编排主图可以恢复和幂等重放 |
+| V0.4.4 联网阶段 | 用户 URL、官方来源定向搜索；开放网络搜索保持可选 | 本地来源闭环与 SSRF/重定向/体积限制完成 |
 
 ---
 
@@ -264,31 +332,32 @@ V0.4.3 的完整生成链已经可能接近 5 分钟，RAG 不能通过无限增
 | 输入 | 首版行为 |
 |---|---|
 | 粘贴文本 | 直接保存为不可变文本版本 |
-| TXT | 支持 UTF-8、UTF-8 BOM；其他编码失败时明确提示 |
+| TXT | 支持 UTF-8（含 BOM）与 GB18030；其他编码失败时明确提示 |
 | PDF | 提取文本并保留页码；没有有效文本时标记 `ocr_required` |
 | DOCX | 读取段落、标题和表格文本；不执行宏或外部对象 |
 
 `.doc` 与伪装扩展名不得作为 DOCX 处理。
 
-### 5.2 上传限制
+### 5.2 资源与安全边界
 
-首版使用环境变量配置上限，文档默认值在实现时固定：
+按当前 Demo 决策，应用层暂不设置固定文件大小、抽取字符数或分块数量上限；分块参数仍保持确定性：
 
 ```text
-SOURCE_UPLOAD_MAX_BYTES
-SOURCE_EXTRACTED_TEXT_MAX_CHARS
-SOURCE_MAX_PAGES
-SOURCE_MAX_CHUNKS
+Child 最小 / 目标 / 最大    约 220 / 450 / 700 Token
+Parent 最大                约 2,400 Token
+固定重叠                    0；仅超长原子节点按自然边界递归回退
 ```
+
+“应用不设固定上限”不等于部署环境无限：反向代理、Serverless 平台、Node.js 内存和 SQLite 磁盘仍可能限制实际可处理体积。当前接口通过 `request.formData()` 一次读取文件，特别大的文件会增加内存、解析耗时和数据库体积；公网长期运行前应改成流式上传/对象存储、后台解析、用户配额和并发控制，而不是重新在前端随意写一个很小的数字。
 
 实现要求：
 
 - 不相信浏览器上报的 MIME；
 - 同时检查扩展名、实际文件签名和解析器结果；
-- 文件保存在非公开目录，使用随机存储键，不使用原始文件名拼路径；
+- 当前原文件 BLOB 保存在 SQLite，不使用原始文件名拼接磁盘路径；
 - 原始文件名只作为显示元数据；
 - 不执行文档宏、脚本、外部链接或嵌入对象；
-- 对 DOCX 压缩结构设置展开大小和文件数量上限；
+- 对 DOCX 校验中央目录、必要 Office 文件、异常压缩比和异常条目数量；这属于恶意压缩结构防护，不是普通文件容量上限；
 - 解析超时或进程异常必须标记失败，不能留下永久 `processing`；
 - 所有 API 必须先校验用户归属。
 
@@ -494,7 +563,7 @@ grounded
 
 ---
 
-## 8. 数据库 Schema V8
+## 8. 数据库 Schema V8 底座与 Schema V9 结构切片扩展
 
 ### 8.1 新表
 
@@ -526,13 +595,20 @@ workflow_runs
 ```text
 id
 user_id
-type                  pasted_text / txt / pdf / docx
 title
+description
+kind                  text / txt / pdf / docx
 original_filename
 mime_type
-trust_level           user_provided
-active_version_id
+byte_size
+content_hash
 status
+parser_version
+current_version_id
+chunk_count
+char_count
+warning_message
+error_message
 created_at
 updated_at
 deleted_at
@@ -547,44 +623,47 @@ deleted_at
 ```text
 id
 source_id
+user_id
 version
-content_hash
-byte_size
-raw_storage_key
+raw_blob
 extracted_text
-extractor_name
-extractor_version
-parse_status
-parse_error
-page_count
+text_hash
+parser_version
+status
+warnings_json
 created_at
 ```
 
-约束：`UNIQUE(source_id, version)`。成为课程证据的版本不允许原地修改。
+约束：`UNIQUE(source_id, version)`。当前 Demo 把原文件 BLOB 与抽取文本一起保存在 SQLite，便于单文件备份且不产生路径穿越面；成为课程证据的版本不允许原地修改。若后续迁移对象存储，只替换 `raw_blob` 存储实现，不改变 `source_version_id` 与内容哈希。
 
-### 8.4 `source_chunks`
+### 8.4 Schema V8 遗留 `source_chunks`
 
 ```text
 id
 source_version_id
+source_id
+user_id
 position
+heading
+content
 page_start
 page_end
-section_path_json
-content
+char_start
+char_end
+token_estimate
 content_hash
-estimated_tokens
 created_at
 ```
 
-该表保留普通 `rowid`，供 FTS5 外部内容索引使用。不能设计成 `WITHOUT ROWID` 后再依赖 FTS5 `content_rowid`。
+以上字段是 V8 历史结构。Schema V9 已重建该表并加入 `chunk_set_id`、`parent_chunk_id`、`section_path_json`、`context_prefix`、节点位置和 `boundary_reason_json`；唯一约束改为 `(chunk_set_id, position)`。`source_chunks_fts` 仍由触发器同步，现索引 `资料标题 + heading + context_prefix + content`，并保存未索引的 `chunk_id / source_id / user_id`。未来检索必须继续回表校验资料状态、active ChunkSet 和所有权，不能只信 FTS 行里的未索引字段。
 
 ### 8.5 `goal_source_links`
 
 ```text
 goal_id
 source_id
-enabled
+user_id
+status                active / disabled
 created_at
 ```
 
@@ -600,9 +679,12 @@ user_id
 goal_id
 lesson_id
 skill_id
-query_json
+agent_run_id
+tool_name
 retrieval_mode          fts5
-max_chunks
+query
+filters_json
+top_k
 max_evidence_tokens
 result_count
 total_evidence_tokens
@@ -615,16 +697,20 @@ created_at
 `retrieval_run_items` 保存本次固定结果：
 
 ```text
+id
 retrieval_run_id
-source_chunk_id
+source_id
+source_version_id
+chunk_id
 rank
 score
+excerpt
 snapshot_text
 snapshot_hash
 created_at
 ```
 
-主键：`(retrieval_run_id, source_chunk_id)`。`snapshot_text` 用于确保原资料停止使用后历史课程仍能回放当时证据。
+约束：`UNIQUE(retrieval_run_id, rank)`。同一 chunk 去重由检索服务在写入前执行；`snapshot_text` 和 `snapshot_hash` 用于确保原资料停止使用后历史课程仍能回放当时证据。当前只建表，尚未写入真实检索运行。
 
 ### 8.7 复用 `lesson_block_sources`
 
@@ -641,33 +727,50 @@ created_at
 ### 8.8 `question_source_links`
 
 ```text
-lesson_content_version_id
+question_type          diagnostic / lesson
 question_id
-source_chunk_id
+lesson_content_version_id
 retrieval_run_id
+source_id
+source_version_id
+chunk_id
 source_snapshot_hash
 support_type
 created_at
 ```
 
-主键：`(lesson_content_version_id, question_id, source_chunk_id)`。
+主键：`(question_type, question_id, chunk_id)`。
 
 当前课程题目仍保存在 JSON 契约中，本版本不为了来源表重构成独立 `course_questions` 表。
 
 ### 8.9 迁移要求
 
-- `DATABASE_SCHEMA_VERSION` 从 7 升到 8；
-- 新表写入完整 `DATABASE_SCHEMA`；
-- 新增列同时进入建表语句和 `COLUMN_ADDITIONS`；
+- V8 已完成资料、版本、FTS5、目标关系、检索运行和题目来源底座；
+- V9 已增加 `knowledge_sources.active_chunk_set_id`、`document_parse_runs`、`document_nodes`、`source_chunk_sets` 和 `source_parent_chunks`，并重建 `source_chunks`；
+- 新表写入完整 `DATABASE_SCHEMA`，后补列同时进入 `COLUMN_ADDITIONS`；
 - FTS5 表、触发器与重建命令必须可重复执行；
-- 新库、V7 老库、重复启动和中断后重启都要通过；
-- V8 不创建 `lesson_annotations`，不增加 `open_book`；这两项留给 Schema V9。
+- 新库、V8 老库、重复启动和中断后重启都要通过；
+- V8/V9 都不创建 `lesson_annotations`，不增加 `open_book`；Schema V10/V11 已分别用于 Embedding 与目标资料范围，这两项若实施应使用后续迁移版本，不再占用已发布版本号。
+
+### 8.10 Schema V9 的不可变切片关系
+
+```text
+knowledge_sources.active_chunk_set_id
+              ↓
+document_parse_runs → document_nodes
+              ↓
+source_chunk_sets → source_parent_chunks → source_chunks
+```
+
+每次重新切片都创建新的 ParseRun 与 ChunkSet；只有节点、Parent、Child、计数与索引全部写入成功后，事务才更新 `active_chunk_set_id`。旧 ChunkSet 不覆盖、不删除。V8 旧数据迁移时为每个旧 Child 创建一个 legacy Parent，保留原 Child ID，确保已经保存的题目或证据引用不失效。
 
 ---
 
-## 9. Agent 与确定性服务边界
+## 9. Agentic RAG Tool 与确定性服务边界
 
 ### 9.1 不新增 RAG Agent
+
+RAG 不是一个需要人格、目标和长期状态的独立 Agent。解析、索引和检索是确定性能力；Tutor 或 Planner 可以根据任务决定是否调用它们，这才是本项目所说的 **Agentic RAG**。
 
 以下工作全部由普通服务完成：
 
@@ -680,6 +783,35 @@ created_at
 - chunk ID 与快照合法性校验；
 - `sourceStatus` 计算；
 - 数据库事务与状态推进。
+
+对 Agent 只暴露窄而可审计的 Tool 契约，首批计划为：
+
+```ts
+search_knowledge_base(input: {
+  goalId: string;
+  query: string;
+  topK?: number;
+  maxEvidenceTokens?: number;
+}): EvidenceBundle;
+
+read_source_chunks(input: {
+  retrievalRunId: string;
+  chunkIds: string[];
+}): RetrievedEvidence[];
+
+check_source_coverage(input: {
+  retrievalRunId: string;
+  requiredConcepts: string[];
+}): {
+  sufficient: boolean;
+  uncoveredConcepts: string[];
+  conflicts: string[];
+};
+```
+
+Tool 实现必须从登录会话、当前目标和工作流上下文解析 `userId`，不得让模型或客户端自行提交 `userId`、任意文件路径或未出现在 `retrievalRun` 中的 chunk ID。每次 Tool 调用写入 `retrieval_runs` / `retrieval_run_items`，并可关联 `agent_runs`；这样“Agent 为什么用了哪份资料”可以回放，而不是只剩一段最终回答。
+
+当前已经实现 `search_knowledge_base` 的确定性核心和服务端上下文包装：支持目标资料范围、`lesson_generation / classroom_qa` 用途、FTS5/精确向量自动路由、Parent 去重、单资料上限、Token 预算、基础覆盖状态、固定 RetrievalRun 快照与阶段计时。登录保护的 `/api/rag/search` 用于调试/BFF；启用 workflow service 后，LangGraph 会先由 Pydantic AI/规则生成检索计划，再让 Next.js 调用该 Tool。**Tool 尚未把 EvidenceBundle 传给 Tutor，也未接入课堂提问页面；`read_source_chunks` 和按 required concepts 的独立 `check_source_coverage` 仍未实现。**
 
 ### 9.2 Tutor 的变化
 
@@ -886,7 +1018,7 @@ RAG_RETRIEVAL_TIMEOUT_MS
 - 相同课节输入和来源版本不重复创建并发检索；
 - 证据上下文超过预算时明确截断并记录原因。
 
-若真实模型加入证据后仍持续超过单节点等待闸门，必须先按教学块组拆分生成，不能只继续提高超时时间。该拆分仍使用现有 Node 工作流和数据库状态，不提前引入 LangGraph。
+若真实模型加入证据后仍持续超过单节点等待闸门，必须在 LangGraph 中按教学块组拆分为可 checkpoint、可幂等重放的短节点，不能只继续提高单次模型调用或 HTTP 请求的超时时间。
 
 ### 12.3 幂等键
 
@@ -1023,7 +1155,7 @@ type GroundingIssue = {
 
 ## 15. 分阶段实施顺序
 
-### 阶段 A：契约与 Schema V8
+### 阶段 A：个人资料库契约与 Schema V8（已完成）
 
 1. 定义资料、版本、片段、检索和公开引用类型；
 2. 将生成方式与来源状态彻底分开；
@@ -1031,29 +1163,44 @@ type GroundingIssue = {
 4. 定义软删除、版本更新和历史快照语义；
 5. 准备固定 TXT/PDF/DOCX/恶意/冲突资料集。
 
-完成条件：新库、V7 迁移和重复启动通过；类型契约能表达块级和题目级来源。
+完成条件：新库、V7 → V8 迁移和重复启动通过；类型契约能表达块级和题目级来源。
 
-### 阶段 B：粘贴文本与 TXT 最小链路
+### 阶段 B：上传、结构解析与父子切片（已完成核心）
 
 1. 实现资料 API 和所有权校验；
-2. 实现粘贴文本、TXT 提取与版本哈希；
-3. 实现确定性分块；
-4. 实现 FTS5 写入、删除和重建；
-5. 在计划页显示资料状态并关联目标。
+2. 实现粘贴文本、TXT、PDF、DOCX 提取与版本哈希；
+3. 实现规范化 Markdown 与 DocumentNode；
+4. 实现不可变 ParseRun/ChunkSet 和结构化 Parent/Child；
+5. 实现重新切片与 active ChunkSet 原子切换；
+6. 实现 FTS5 自动写入和父子切片查看器。
 
-完成条件：用户能从导入文本走到目标范围内的可复现检索结果。
+完成情况：核心链路已完成。PDF 复杂版面仍等待 MinerU，LLM 模糊边界辅助不属于当前确定性基线。
 
-### 阶段 C：PDF 与 DOCX
+### 阶段 C：目标范围与真实检索（核心已完成）
 
-1. PDF 保留页码；
-2. 扫描 PDF 正确进入 `ocr_required`；
-3. DOCX 保留标题、段落、列表和表格文字；
-4. 增加体积、展开量、页数和超时限制；
-5. 增加解析失败恢复与重复文件处理。
+1. 已完成目标资料范围 UI/API：`auto` 默认纳入全部可用资料并允许排除，`selected` 只允许严格白名单；
+2. 已实现 FTS5 查询、精确向量路由以及用户/目标/active ChunkSet 过滤；
+3. 已实现 Parent 去重、单资料上限和统一 Token 预算；当前不额外拼接相邻 Child；
+4. 已写入不可变 RetrievalRun/Item、SourceVersion/ChunkSet 快照、Parent 文本哈希和 Pipeline 阶段计时；
+5. 已增加隔离数据库契约回归；固定问题集的 Recall@K、legacy/structure A/B 和 reranker 仍是后续质量工作。
 
-完成条件：四类输入统一进入 `source_versions → source_chunks → FTS5`。
+完成情况：核心工程条件已满足。下一步进入阶段 D；在 Tool 接入课程前仍需由编排层为课节生成查询和处理 `insufficient` 分支。
 
-### 阶段 D：检索接入 Tutor
+### 阶段 D：LangGraph / Pydantic AI 最小编排层
+
+1. 建立只供 Next.js 调用的 Python FastAPI workflow service；
+2. 将 `prepareGoalLoop`、`generateCourseForGoal` 和课程质量修复循环拆成 LangGraph 节点；
+3. 使用 Pydantic AI 收紧 Planner、Tutor、Examiner 和质量复核的结构化输入输出；
+4. 使用持久化 checkpointer、稳定 `thread_id`、节点幂等键和输入哈希；
+5. 将等待诊断回答和资料不足等待实现为显式 `interrupt`；
+6. 图状态只保存业务 ID、小型路由状态和错误摘要，业务正文与证据继续保存在权威数据库；
+7. 前端进度从持久化节点事件读取，刷新和服务重启后仍可显示真实阶段。
+
+完成条件：课程准备流程在浏览器刷新、请求断开或服务重启后可从最近完成节点继续，节点重放不会重复创建检索运行、课程版本或题目。
+
+完成情况：最小主图已实现。LangGraph checkpoint、诊断/资料 interrupt、Next.js 外部动作执行、Schema V12 事件日志和幂等动作结果已经落地，并通过服务重启测试与真实 Next.js/FastAPI 隔离数据库回归。Pydantic AI 当前先用于检索计划；课程质量修复仍是 `generate_course` 动作内的 TypeScript 子流程，全部 Agent 的 Pydantic AI 迁移与更细节点拆分留到证据课程接线时完成。
+
+### 阶段 E：检索接入 Tutor
 
 1. 由课节目标构造检索输入；
 2. 建立证据 Token 预算和来源去重；
@@ -1064,7 +1211,7 @@ type GroundingIssue = {
 
 完成条件：正式来源课程的每个必要教学块均能回到固定片段。
 
-### 阶段 E：来源题目与固定评分
+### 阶段 F：来源题目与固定评分
 
 1. 题目生成保存 `sourceChunkIds`；
 2. 题目来源必须来自 `taughtBlockIds`；
@@ -1074,7 +1221,7 @@ type GroundingIssue = {
 
 完成条件：资料更新、停止使用或重新上传后，历史评分标准保持不变。
 
-### 阶段 F：引用 UI 与回归
+### 阶段 G：引用 UI 与回归
 
 1. 资料区和真实解析进度；
 2. 教学块来源抽屉；
@@ -1085,19 +1232,33 @@ type GroundingIssue = {
 
 完成条件：从导入资料到来源课程、来源题目和固定评分的完整 E2E 通过。
 
+### 阶段 H：联网资料补充
+
+1. `search_web` 只返回来源候选，不直接进入课程 Prompt；
+2. 用户选中后通过 `ingest_url` 进入统一 Source、Version、ParseRun、ChunkSet 和 Embedding 主链；
+3. 绑定当前 Goal 并重新执行覆盖检查；
+4. 网页更新创建新版本，不在检索或评分时自动刷新；
+5. 完成 SSRF、重定向、协议、地址、体积和超时安全回归。
+
+完成条件：本地资料不足的 interrupt 可以在用户补充可信网页后恢复，并生成与本地文件相同可追溯标准的课程。
+
 ---
 
 ## 16. Definition of Done
 
 V0.4.4 核心版只有同时满足以下条件才算完成：
 
-- [ ] 支持粘贴文本、TXT、可检索 PDF 和 DOCX；
-- [ ] 扫描 PDF 明确返回 `ocr_required`；
+- [x] 支持粘贴文本、TXT、可检索 PDF 和 DOCX；
+- [x] 扫描 PDF 明确返回 `ocr_required`；
 - [ ] 所有资料、版本、片段和目标关系都执行用户所有权校验；
-- [ ] Schema V8 新库、V7 迁移、重复迁移和完整性校验通过；
+- [x] Schema V9 新库、V8 表重建迁移、旧 Chunk ID 保留、重复迁移和完整性校验通过；
 - [ ] FTS5 检索只访问当前用户、当前目标和启用版本；
 - [ ] 检索结果受 chunk 数、单资料占比和 Token 预算约束；
 - [ ] 资料不足时进入 `source_insufficient`，不静默伪装为来源课程；
+- [x] 目标准备主流程使用持久化 LangGraph checkpoint，并能在请求结束或服务重启后恢复；
+- [x] 等待诊断回答和资料不足等待使用显式 `interrupt`，恢复时沿用同一个 `thread_id`；
+- [x] 图状态不复制全文、完整 Chunk 或课程正文，外部动作重放通过幂等结果缓存避免重复业务记录；
+- [x] 当前 Pydantic AI 检索计划输出经过 schema 校验，模型不能决定用户、权限或业务事务；
 - [ ] 不再把课节全部来源复制给每个教学块；
 - [ ] 所有 `grounded` 必要教学块绑定真实 chunk 和非空快照哈希；
 - [ ] 所有 `grounded` 正式题目绑定其已教学块的来源片段；
@@ -1110,7 +1271,8 @@ V0.4.4 核心版只有同时满足以下条件才算完成：
 - [ ] 解析、检索、生成、质量和失败均记录耗时、Token 或错误原因；
 - [ ] `typecheck`、`lint`、数据库校验、生产构建和 V0.4.4 E2E 通过；
 - [ ] README、课程说明、V1、Roles、数据库说明和项目亮点同步更新；
-- [ ] 没有把 Embedding、联网搜索、Pydantic AI、LangGraph、阶段大考或课堂标注混入核心范围；
+- [ ] 没有把确定性 RAG 包装成独立 Agent，也没有借框架迁移重写 Next.js、数据库或全部 CRUD；
+- [ ] 联网资料仅在本地闭环之后接入，搜索候选不会未经抓取、解析和入库直接用于教学；
 - [ ] 没有未经实验支撑的学习效果百分比。
 
 ---
@@ -1164,13 +1326,13 @@ scripts/
 | 版本 | 重点 | 与 V0.4.4 的关系 |
 |---|---|---|
 | V0.4.3 | 结构化课程与教学质量门禁 | 提供 `LearningBlock`、内容版本和题目追溯基础 |
-| V0.4.4 | 私有资料、FTS5 与来源快照 | 本文核心范围 |
-| V0.4.4.1 | Embedding 与混合检索 | 替换/增强检索实现，不改变 Tutor 证据契约 |
-| V0.4.4.2 | 用户指定 URL | 进入统一来源版本和片段链 |
-| V0.4.4.3 | 官方联网来源 | 增加联网权限、可信等级和抓取快照 |
-| V0.4.5 | Pydantic AI + LangGraph | 迁移已经稳定的资料、检索和课程契约 |
+| V0.4.4 基础/向量阶段 | 私有资料、MinerU、父子切片、FTS5、Embedding 与资料级向量检索 | 已完成主要底座，不改变 Tutor 证据契约 |
+| V0.4.4 编排阶段 | Pydantic AI 与 LangGraph 最小课程主图 | 目标范围 Tool 核心已经完成；在修改 Tutor 为来源课程前建立可恢复边界 |
+| V0.4.4 教学阶段 | 来源课程、来源题目、固定评分与引用 UI | 使用同一 EvidenceBundle 和不可变快照 |
+| V0.4.4 联网阶段 | 用户 URL 与官方联网来源 | 进入统一来源版本和片段链，增加联网权限与安全门禁 |
+| V0.4.5 | 工作流扩展与加固 | 扩展补课、间隔复习和更多人工确认点，不再承担首次框架迁移 |
 | V0.5 | 补课、阶段考核、模拟面试与毕业门禁 | 使用固定来源和高质量教学证据推进正式考核 |
-| Schema V9 | 困惑、收藏和 `open_book` | 与本文独立，不占用 V8 |
+| 后续 Schema | 困惑、收藏和 `open_book` | 与本文独立；V10/V11 已被 Embedding 与目标资料范围使用，实施时再分配版本 |
 
 ---
 
@@ -1187,7 +1349,7 @@ scripts/
 7. 不允许 `grounded` 在缺少块级或题目级来源时通过；
 8. 不因用户删除资料而静默破坏历史证据；
 9. 不把用户资料中的指令当作系统指令；
-10. 不提前引入向量数据库、联网搜索、LangGraph 或 Pydantic AI；
+10. LangGraph/Pydantic AI 只迁移目标准备与课程生成主流程；不得让 Python 图直接绕过 Next.js 的所有权、幂等和事务门禁；
 11. 每次修改同步 README 变更记录；
 12. 所有量化结论必须来自固定资料集、数据库查询或自动回归。
 

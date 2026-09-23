@@ -46,6 +46,7 @@ export async function buildSkillMap(goal: GoalContext) {
     user: `目标：${goal.title}\n完成标准：${goal.description || "能独立完成一项可验证成果"}\n当前背景：${goal.background || "未说明"}\n请输出 {"skills":[...]}，包含 4-6 项。每项字段：key（英文短标识）、name、description（可观察能力）、targetLevel（1-5）、weight（0.5-2）、capabilityType。capabilityType 只能是 ${CAPABILITY_TYPES.join("、")}；按用户最终需要证明的行为选择，不要把所有知识都标成概念理解。`,
     normalize(raw) {
       const values = Array.isArray(raw.skills) ? raw.skills.slice(0, 6) : [];
+      if (values.some(value => !cleanText(asRecord(value)?.name) || !cleanText(asRecord(value)?.description))) return null;
       const skills = values.map((value, index) => {
         const item = asRecord(value);
         const source = fallback[index] || fallback[fallback.length - 1];
@@ -61,7 +62,7 @@ export async function buildSkillMap(goal: GoalContext) {
             : inferCapabilityType(`${cleanText(item?.name)} ${cleanText(item?.description)}`, index),
         };
       });
-      return skills.length >= 4 ? skills : fallback;
+      return skills.length >= 4 ? skills : null;
     },
   });
 }
@@ -105,18 +106,32 @@ function fallbackOutline(goal: GoalContext, skills: PersistedSkill[], lessonCoun
   };
 }
 
-export async function buildCourseOutline(goal: GoalContext, skills: PersistedSkill[], lessonCount?: number) {
+export async function buildCourseOutline(goal: GoalContext, skills: PersistedSkill[], lessonCount?: number, onValidationRepair?: (issues: string[]) => Promise<void>) {
   const count = Math.max(3, Math.min(12, lessonCount || estimateLessonCount(goal, skills.length)));
   const fallback = fallbackOutline(goal, skills, count);
   return requestStructured({
     fallback,
     timeoutMs: 90_000,
+    repairValidation: true,
+    onValidationRepair,
+    validationIssues: () => [`lessons: 必须输出恰好 ${count} 节课程；每节都需有具体 title、objective 及有效 skillId，不能用目标原话拼接通用标题`],
     system: "你是学习规划员。根据已经持久化的能力清单生成课程骨架，不写讲解正文、不出题。只输出严格 JSON。",
-    user: `目标：${goal.title}\n完成标准：${goal.description}\n目标日期：${goal.targetDate || "不设期限"}\n每周投入：${goal.weeklyHours} 小时\n能力：${JSON.stringify(skills)}\n系统根据时间容量决定生成 ${count} 节。输出 title、summary、outcomes、cadence、instructor，以及恰好 ${count} 节 lessons。每节只含 title、phase、objective、concepts、durationMinutes、skillId、difficulty、capabilityType、prerequisites、completionEvidence。skillId 必须来自能力清单；capabilityType 必须来自允许集合；completionEvidence 必须描述可观察产物或表现，禁止只写“理解/掌握”。`,
+    user: `目标：${goal.title}\n完成标准：${goal.description}\n自评基础：${goal.selfLevel}\n学习背景：${goal.background || "未说明"}\n目标日期：${goal.targetDate || "不设期限"}\n每周投入：${goal.weeklyHours} 小时\n能力：${JSON.stringify(skills)}\n系统根据时间容量决定生成 ${count} 节。输出 title、summary、outcomes、cadence、instructor，以及恰好 ${count} 节 lessons。每节只含 title、phase、objective、concepts、durationMinutes、skillId、difficulty、capabilityType、prerequisites、completionEvidence。skillId 必须来自能力清单；capabilityType 必须来自允许集合；completionEvidence 必须描述可观察产物或表现，禁止只写“理解/掌握”。\n课程标题要直接说明具体知识或技能，不要包含“我想学习”等用户口吻，不要把目标原话拼上“核心概念与边界/核心方法/实际应用/纠错与复盘/综合交付”当作课名。即使能力清单使用粗粒度名称，也应按目标领域拆成具体课题；能力 id 只用于关联评测，不决定课程顺序。按知识前置依赖从基础到应用编排，综合任务放在相应基础之后。`,
     normalize(raw) {
       const allowed = new Set(skills.map((skill) => skill.id));
-      const rawLessons = Array.isArray(raw.lessons) ? raw.lessons.slice(0, count) : [];
-      if (rawLessons.length !== count) return fallback;
+      const rawLessons = Array.isArray(raw.lessons) ? raw.lessons : [];
+      if (rawLessons.length !== count) return null;
+      if (rawLessons.some(value => {
+        const item = asRecord(value);
+        const title = cleanText(item?.title);
+        return !title || !cleanText(item?.objective) || !allowed.has(cleanText(item?.skillId))
+          || /^(我想|我要|我希望)/.test(title)
+          || title === `${goal.title}的核心概念与边界`
+          || title === `${goal.title}的核心方法`
+          || title === `${goal.title}的实际应用`
+          || title === `${goal.title}的纠错与复盘`
+          || title === `${goal.title}的综合交付`;
+      })) return null;
       const lessons = rawLessons.map((value, index) => {
         const item = asRecord(value);
         const source = fallback.lessons[index];

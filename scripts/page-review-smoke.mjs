@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+process.env.SQLITE_DATABASE_PATH=join(mkdtempSync(join(tmpdir(),'page-review-')),'test.sqlite');
+Object.assign(process.env,{LLM_PROVIDER:'openai-compatible',LLM_BASE_URL:'https://model.test',LLM_API_KEY:'test',LLM_MODEL:'test'});
+const {getDatabase}=await import('../lib/db/index.ts');
+const {reviewWebPage,pageSample}=await import('../lib/knowledge/page-review.ts');
+const db=getDatabase(),now=new Date().toISOString();
+for(const id of ['a','b'])db.prepare("INSERT INTO users(id,username,password_hash,display_name,created_at,updated_at) VALUES(?,?,'x',?,?,?)").run(id,id,id,now,now);
+let calls=0,kind='teaching';
+const excerpt='Java primitive values are copied by assignment, while reference values identify objects.';
+const markdown='# Assignment\n\n'+(excerpt+'\n\n').repeat(1000);
+assert(Object.values(pageSample(markdown)).join('').length<=3600);
+const original=globalThis.fetch;
+globalThis.fetch=async(_url,options)=>{
+  calls++;
+  const body=JSON.parse(options.body);
+  assert(body.messages.at(-1).content.length<6500);
+  const result={kind,reason:'测试页面用途',excerpt};
+  return Response.json({choices:[{message:{content:JSON.stringify(result)},finish_reason:'stop'}],usage:{prompt_tokens:100,completion_tokens:30,total_tokens:130}});
+};
+try {
+  assert.equal((await reviewWebPage('a','https://example.com','Java',markdown)).data.kind,'teaching');
+  assert((await reviewWebPage('a','https://example.com','Java',markdown)).cached);
+  assert.equal(calls,1);
+  await reviewWebPage('b','https://example.com','Java',markdown);assert.equal(calls,2);
+  await reviewWebPage('a','https://example.com','Java',markdown+'new');assert.equal(calls,3);
+  const nav=Array.from({length:10},(_,i)=>'[chapter '+i+'](https://example.com/'+i+')').join('\n');
+  assert.equal((await reviewWebPage('a','https://example.com/nav','目录',nav)).data.kind,'resource_index');
+  assert.equal(calls,3);
+  kind='promotion';
+  assert.equal((await reviewWebPage('a','https://example.com/ad','促销','现在购买完整课程，仅展示产品介绍。'.repeat(60))).data.kind,'promotion');
+  kind='teaching';
+  const before=calls;
+  assert.equal((await reviewWebPage('a','https://example.com/false','假教程','没有任何对应的教学原文'.repeat(30))).data.kind,'uncertain');
+  await reviewWebPage('a','https://example.com/false','假教程','没有任何对应的教学原文'.repeat(30));
+  assert.equal(calls,before+2,'uncertain result must not be cached');
+  console.log('PASS: bounded samples, evidence quote required, navigation rules, promotion, cache/user isolation/content invalidation, uncertain retry.');
+}finally{globalThis.fetch=original;db.close();}

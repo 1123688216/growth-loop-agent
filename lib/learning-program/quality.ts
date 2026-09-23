@@ -9,7 +9,7 @@ import type {
 
 export const LESSON_SCHEMA_VERSION = "1" as const;
 export const LESSON_QUALITY_CHECKER_VERSION = "v0.4.3-rules-1";
-export const LESSON_PROMPT_VERSION = "v0.4.3-tutor-1";
+export const LESSON_PROMPT_VERSION = "v0.4.4-grounded-tutor-1";
 export const MAX_LESSON_REPAIR_ATTEMPTS = 2;
 
 const GENERIC_PATTERNS = [
@@ -162,7 +162,8 @@ export function buildLessonQualityReport(input: {
   const warnings = issues.length - errors;
   return {
     deterministicPassed: deterministicIssues.every((item) => item.severity !== "error"),
-    semanticPassed: input.semanticPassed ?? semanticIssues.every((item) => item.severity !== "error"),
+    // No review result is not a successful review.
+    semanticPassed: input.semanticPassed === true,
     score: Math.max(0, 100 - errors * 12 - warnings * 4),
     issues,
     checkerVersion: LESSON_QUALITY_CHECKER_VERSION,

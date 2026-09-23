@@ -1,0 +1,149 @@
+# Local-only subset of the official v0.27.2 stack. No teaching workflow here.
+name: growth-loop-ragflow
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  ragflow:
+    image: infiniflow/ragflow:v0.27.2@sha256:e6b3f1a185c0a70abb3a72e1092415df8c5c6a4fae0089545554f2936c4b27ab
+    command: ["--workers=1", "--disable-datasync", "--init-model-provider-tables"]
+    ports:
+      - "127.0.0.1:${RAGFLOW_WEB_PORT:-8088}:80"
+    env_file: .env
+    environment:
+      DOC_ENGINE: elasticsearch
+      DB_TYPE: mysql
+      API_PROXY_SCHEME: python
+      DEVICE: cpu
+      USE_DOCLING: "false"
+      MAX_CONCURRENT_TASKS: "1"
+      MAX_CONCURRENT_CHUNK_BUILDERS: "1"
+      MAX_CONCURRENT_MINIO: "2"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./service_conf.yaml.template:/ragflow/conf/service_conf.yaml.template:ro
+      - ragflow_logs:/ragflow/logs
+      - ragflow_state:/root/.ragflow
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      es01: {condition: service_healthy}
+      mysql: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    mem_limit: 4g
+    cpus: 4
+    ulimits:
+      nofile: {soft: 65535, hard: 65535}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "10", "http://127.0.0.1:9380/api/v1/system/healthz"]
+      interval: 20s
+      timeout: 15s
+      start_period: 120s
+      retries: 10
+    restart: "no"
+    logging: *logging
+
+  es01:
+    # Reuses the already downloaded image, NOT existing Elasticsearch data.
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.3
+    environment:
+      node.name: es01
+      discovery.type: single-node
+      bootstrap.memory_lock: "false"
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:?Run the setup script first}
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      cluster.routing.allocation.disk.watermark.low: 5gb
+      cluster.routing.allocation.disk.watermark.high: 3gb
+      cluster.routing.allocation.disk.watermark.flood_stage: 2gb
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    tmpfs:
+      - /tmp:mode=1777,size=256m
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u elastic:$$ELASTIC_PASSWORD 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    restart: "no"
+    logging: *logging
+
+  mysql:
+    image: mysql:8.0.40
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run the setup script first}
+      MYSQL_DATABASE: rag_flow
+      MYSQL_USER: ragflow
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run the setup script first}
+    command:
+      - --max_connections=150
+      - --innodb-buffer-pool-size=256M
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --max-allowed-packet=256M
+      - --binlog-expire-logs-seconds=604800
+    volumes:
+      - mysql_data:/var/lib/mysql
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h127.0.0.1 -u ragflow -D rag_flow -e 'SELECT 1' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      start_period: 30s
+      retries: 30
+    restart: "no"
+    logging: *logging
+
+  minio:
+    # S3-compatible storage image used in the upstream v0.27.2 compose file.
+    image: pgsty/silo:RELEASE.2026-08-06T00-00-00Z
+    command: ["server", "--console-address", ":9001", "/data"]
+    environment:
+      MINIO_ROOT_USER: ragflow
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?Run the setup script first}
+    volumes:
+      - minio_data:/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    restart: "no"
+    logging: *logging
+
+  redis:
+    image: valkey/valkey:8
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run the setup script first}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: "no"
+    logging: *logging
+
+volumes:
+  es_data:
+  mysql_data:
+  minio_data:
+  redis_data:
+  ragflow_logs:
+  ragflow_state:

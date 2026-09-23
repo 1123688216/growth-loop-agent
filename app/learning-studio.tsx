@@ -1,6 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import LessonQualityDetails from "./lesson-quality-details";
+import QuestionText from "./question-text";
+import { useAnswerDraft } from "./use-answer-draft";
+import GoalSourceScopeButton from "./goal-source-scope";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -51,6 +56,7 @@ type LearningStudioProps = {
   onLessonPassed?: (lesson: CourseLesson, grade: CourseLessonGrade) => void;
   goals?: Goal[];
   onSelectGoal?: (goal: Goal) => Promise<void>;
+  onProgramRegenerated?: (program: LearningProgram) => void;
 };
 
 function readCachedProgramId() {
@@ -84,7 +90,7 @@ function courseStatusLabel(mode: LearningProgram["mode"]) {
 function sourceStatusLabel(status: CourseLesson["sourceStatus"]) {
   if (status === "grounded") return "来源已验证";
   if (status === "partially_grounded") return "部分来源可追溯";
-  return "模型知识 · 未验证";
+  return "模型知识生成 · 未经资料验证";
 }
 
 function passedLessonIds(program: LearningProgram) {
@@ -100,11 +106,13 @@ export default function LearningStudio({
   onLessonPassed,
   goals = [],
   onSelectGoal,
+  onProgramRegenerated,
 }: LearningStudioProps) {
   const [program, setProgram] = useState<LearningProgram | null>(null);
+  const [waitingForSources, setWaitingForSources] = useState(false);
+  const [sourceResumeAction, setSourceResumeAction] = useState<"tutor" | "lesson" | "course">("lesson");
   const [activeLessonId, setActiveLessonId] = useState("");
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([]);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [grades, setGrades] = useState<Record<string, CourseLessonGrade>>({});
   const [tutorInput, setTutorInput] = useState("");
   const [tutorReply, setTutorReply] = useState<LessonTutorReply | null>(null);
@@ -112,6 +120,22 @@ export default function LearningStudio({
   const [isTutorBusy, setIsTutorBusy] = useState(false);
   const [isGrading, setIsGrading] = useState(false);
   const [isRetryingLesson, setIsRetryingLesson] = useState(false);
+  const [retryScope, setRetryScope] = useState<"lesson" | "course">("lesson");
+  const retryDialog = useRef<HTMLDialogElement>(null);
+  const [retryProgress, setRetryProgress] = useState({ percent: 0, message: "正在提交重新生成请求" });
+  const [retryEvents, setRetryEvents] = useState<string[]>([]);
+  const [retrySeconds, setRetrySeconds] = useState(0);
+  const [retrySourceMessage, setRetrySourceMessage] = useState("");
+  const [retryFailure, setRetryFailure] = useState<{ lessonId: string; message: string } | null>(null);
+  useEffect(() => {
+    if (!isRetryingLesson) return;
+    retryDialog.current?.showModal();
+    const started = Date.now();
+    const timer = setInterval(() => setRetrySeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => { clearInterval(timer); window.removeEventListener("beforeunload", warn); };
+  }, [isRetryingLesson]);
   const [error, setError] = useState("");
 
   const applyProgram = useCallback((next: LearningProgram) => {
@@ -156,6 +180,12 @@ export default function LearningStudio({
     () => program?.lessons.find((lesson) => lesson.id === activeLessonId) || program?.lessons[0] || null,
     [activeLessonId, program],
   );
+  const questionVersion = activeLesson?.questions.length ? `${activeLesson.contentVersionId || 'legacy'}:${activeLesson.questions.map(q=>q.id).join(',')}` : '';
+  const activeGradeKey = `${activeLesson?.id || ''}:${questionVersion}`;
+  const draft = useAnswerDraft(program?.programId || '',activeLesson?.generationStatus === 'ready' ? activeLesson.id : '',questionVersion);
+  const answers = draft.answers;
+  const activeGrade = grades[activeGradeKey] || draft.grade;
+  const draftStatus = <div role="status"><small>{draft.message}{activeGrade && '；下方是最近一次已保存的评分，修改答案后需重新评分。'}</small>{draft.status === 'error' && <button type="button" onClick={()=>void draft.retry()}>重试草稿保存/恢复</button>}{['error','conflict'].includes(draft.status) && draft.loaded && <button type="button" onClick={()=>void navigator.clipboard.writeText(activeLesson?.questions.map(q=>`${q.prompt}\n${answers[q.id] || ''}`).join('\n\n') || '').catch(()=>setError('无法写入剪贴板，请手动复制答案。'))}>复制当前答案</button>}</div>;
 
   useEffect(() => {
     if (!program || !targetLessonId) return;
@@ -179,7 +209,8 @@ export default function LearningStudio({
           message: tutorInput.trim(),
         }),
       });
-      const data = (await response.json()) as { reply?: LessonTutorReply; error?: string };
+      const data = (await response.json()) as { reply?: LessonTutorReply; error?: string; code?:string };
+      if(data.code === 'source_selection_required') { setSourceResumeAction("tutor"); setWaitingForSources(true); return; }
       if (!response.ok || !data.reply) throw new Error(data.error || "老师暂时没有回应。");
       setTutorReply(data.reply);
       setTutorInput("");
@@ -191,7 +222,7 @@ export default function LearningStudio({
   }
 
   async function gradeLesson() {
-    if (!program || !activeLesson) return;
+    if (!program || !activeLesson || !draft.loaded || isGrading) return;
     const hasAnswer = activeLesson.questions.some((question) => answers[question.id]?.trim());
     if (!hasAnswer) {
       setError("先写下一道题的想法，老师才能给你有用的反馈。");
@@ -200,24 +231,31 @@ export default function LearningStudio({
     setIsGrading(true);
     setError("");
     try {
+      await draft.flush();
+      if(draft.isDirty()) throw new Error('答案草稿尚未确认保存，请先重试保存或复制答案。');
       const response = await fetch("/api/learning-program", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "grade",
+          deferNextLesson: true,
           programId: program.programId,
           lessonId: activeLesson.id,
           answers,
         }),
       });
-      const data = (await response.json()) as { grade?: CourseLessonGrade; program?: LearningProgram | null; error?: string };
-      if (!response.ok || !data.grade) throw new Error(data.error || "暂时无法评分。");
+      const data = (await response.json()) as { grade?: CourseLessonGrade; program?: LearningProgram | null; error?: string; nextLessonWarning?:string; code?:string; reason?:string };
+      if (!response.ok || !data.grade) throw new Error(data.code === 'grading_unavailable'
+        ? `${data.error} ${data.reason ? `原因：${data.reason}。` : ''}答案草稿已保存，可再次点击评分重试。下方已有成绩（如有）仍是上次结果，不是本次评分。`
+        : data.error || "暂时无法评分。");
       const grade = data.grade;
-      setGrades((current) => ({ ...current, [activeLesson.id]: grade }));
+      setGrades((current) => ({ ...current, [activeGradeKey]: grade }));
       if (data.program) applyProgram(data.program);
+      if(data.nextLessonWarning) setError(data.nextLessonWarning);
       if (!grade.passed) return;
       if (!completedLessonIds.includes(activeLesson.id)) {
-        setCompletedLessonIds((current) => [...current, activeLesson.id]);
+        // applyProgram may already have inserted this lesson from the saved result.
+        setCompletedLessonIds((current) => current.includes(activeLesson.id) ? current : [...current, activeLesson.id]);
         onLessonPassed?.(activeLesson, grade);
       }
     } catch (caught) {
@@ -227,27 +265,80 @@ export default function LearningStudio({
     }
   }
 
-  async function retryLesson() {
-    if (!program || !activeLesson) return;
+  async function retryLesson(scope: "lesson" | "course" = "lesson", confirmed = false) {
+    if (!program || !activeLesson || isRetryingLesson) return;
+    if (scope === "course" && !confirmed && !window.confirm("将使用之前填写的目标、基础、背景和时间安排，重新规划所有课名、顺序并生成首课。成功后启用新版本，路线完成进度从 0 开始；旧课程、答题成绩和任务记录保留，能力画像继续复用。失败不替换旧课程。是否继续？")) return;
+    setRetryScope(scope);
     setIsRetryingLesson(true);
+    setRetrySeconds(0);
+    setRetryFailure(null);
+    setRetrySourceMessage("");
+    setRetryProgress({ percent: 0, message: "正在提交重新生成请求" });
+    setRetryEvents([]);
     setError("");
     try {
       const response = await fetch("/api/learning-program", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "retry-lesson", programId: program.programId, lessonId: activeLesson.id }),
+        body: JSON.stringify({ action: scope === "course" ? "regenerate-course-stream" : "retry-lesson-stream", programId: program.programId, lessonId: activeLesson.id }),
       });
-      const data = (await response.json()) as { program?: LearningProgram; error?: string };
-      if (!response.ok || !data.program) throw new Error(data.error || "课程重新生成失败。");
-      applyProgram(data.program);
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "课程重新生成失败。");
+      }
+      if (!response.body) throw new Error("未收到生成进度流。");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result: LearningProgram | undefined;
+      let needsSources = false;
+      const consume = (line: string) => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === "needs_sources") { needsSources = true; return; }
+        if (event.type === "error") throw new Error(event.error || "课程重新生成失败。");
+        if (event.type === "progress" && typeof event.progress?.message === "string" && Number.isFinite(event.progress.percent)) {
+          if (event.progress.stage === "sources") setRetrySourceMessage(event.progress.message);
+          setRetryProgress((current) => ({ percent: Math.max(current.percent, Math.min(100, event.progress.percent)), message: event.progress.message }));
+          setRetryEvents(current=>[...current,event.progress.message].slice(-100));
+        }
+        if (event.type === "result") result = event.program;
+      };
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) consume(line);
+          if (done) { consume(buffer); break; }
+        }
+      } finally { reader.releaseLock(); }
+      if (needsSources) { setSourceResumeAction(scope); setWaitingForSources(true); return; }
+      if (!result) throw new Error("生成连接已结束但没有收到结果。请重新读取课程确认状态，避免立即重复生成。");
+      applyProgram(result);
+      if (scope === "course") {
+        setGrades({});
+        setTutorInput("");
+        setTutorReply(null);
+        onProgramRegenerated?.(result);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "课程重新生成失败。");
+      setRetryFailure({ lessonId: activeLesson.id, message: caught instanceof Error ? caught.message : "课程重新生成失败。" });
     } finally {
       setIsRetryingLesson(false);
     }
   }
 
-  function chooseLesson(lesson: CourseLesson) {
+  async function leaveWithSavedDraft(action: () => void | Promise<void>) {
+    await draft.flush();
+    if(draft.isDirty()) {setError('当前答案尚未保存，暂未切换。请重试保存或先复制答案。');return;}
+    await action();
+  }
+  async function chooseLesson(lesson: CourseLesson) {
+    await draft.flush();
+    if(draft.isDirty()) {setError('当前答案尚未保存，暂未切换。请重试保存或先复制答案。');return;}
     setActiveLessonId(lesson.id);
     setTutorReply((current) => current && current.lessonId === lesson.id ? current : null);
     setError("");
@@ -255,16 +346,31 @@ export default function LearningStudio({
 
   return (
     <section className={`learning-studio ${compact ? "is-compact" : ""}`} aria-label="AI 学习课程">
-      {compact && onBack && <div className="learning-compact-toolbar"><button className="learning-back-button" onClick={onBack}><ArrowLeft size={16} /> 返回计划</button></div>}
+      {waitingForSources && program?.goalId && !isRetryingLesson && <GoalSourceScopeButton initialOpen
+        key={program.goalId} goalId={program.goalId} goalTitle={program.title}
+        onDismiss={() => setWaitingForSources(false)}
+        onSaved={() => { setWaitingForSources(false); if(sourceResumeAction === "tutor") void askTutor(); else void retryLesson(sourceResumeAction, true); }} />}
+      {isRetryingLesson && createPortal(<dialog ref={retryDialog} className="quick-log-dialog goal-progress-dialog lesson-regeneration-dialog" aria-labelledby="retry-lesson-title" onCancel={(event) => event.preventDefault()}>
+        <div className="goal-progress-dialog-heading"><h2 id="retry-lesson-title">{retryScope === "course" ? "正在重新规划并生成课程" : "正在重新生成本节正文"}</h2><p role="status">{retryProgress.message}</p></div>
+        <div className="goal-creation-progress-heading"><strong>当前阶段 · 已用时 {retrySeconds} 秒</strong><em>{retryProgress.percent}%</em></div>
+        <div className="goal-creation-progress-track" role="progressbar" aria-label={retryScope === "course" ? "课程重新生成进度" : "本节重新生成进度"} aria-valuemin={0} aria-valuemax={100} aria-valuenow={retryProgress.percent}><span style={{ width: `${retryProgress.percent}%` }} /></div>
+        {retryScope === "course" && <p>复用已填资料 → 重新规划标题与顺序 → 生成首课 → 检查与出题 → 保存新版本。成功前保留旧课程。</p>}
+        <p>阶段进度为估计值；知识补充最多 3 轮，证据充分即提前结束。</p>
+        <details open><summary>详细执行记录（轮次、缺口、来源与处理结果）</summary><ol style={{maxHeight:240,overflowY:'auto',overflowWrap:'anywhere'}}>{retryEvents.map((message,index)=><li key={index}>{message}</li>)}</ol></details>
+        {retrySourceMessage && <p><strong>资料来源与原因：</strong>{retrySourceMessage}</p>}
+        <p>进度代表执行阶段，不是模型输出字数。生成期间暂不切换功能，请勿刷新或关闭页面。</p>
+      </dialog>, document.body)}
+      {compact && onBack && <div className="learning-compact-toolbar"><button className="learning-back-button" onClick={()=>void leaveWithSavedDraft(onBack)}><ArrowLeft size={16} /> 返回计划</button></div>}
 
       {error && <p className="learning-error" role="alert">{error}</p>}
+      {!isRetryingLesson && retryEvents.length>0 && <details><summary>查看上次生成的详细执行记录</summary><ol style={{maxHeight:240,overflowY:'auto',overflowWrap:'anywhere'}}>{retryEvents.map((message,index)=><li key={index}>{message}</li>)}</ol></details>}
 
       {goals.length > 0 && <section className="learning-goal-switch" aria-label="切换学习目标">
         <div><span className="eyebrow">LEARNING GOALS</span><strong>切换学习目标</strong><small>课程、诊断和进度分别归属于各自目标。</small></div>
         <div className="learning-goal-switch-list">{goals.map((goal) => {
           const active = program?.goalId === goal.id;
           const needsDiagnostic = goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress";
-          return <button key={goal.id} type="button" className={active ? "active" : ""} onClick={() => void onSelectGoal?.(goal)} aria-pressed={active}>
+          return <button key={goal.id} type="button" className={active ? "active" : ""} onClick={() => void leaveWithSavedDraft(()=>onSelectGoal?.(goal))} aria-pressed={active}>
             <strong>{goal.title}</strong>
             <span>{active ? "当前课程" : needsDiagnostic ? "继续初始诊断" : goal.learningProgramId ? "切换课程" : "准备学习路径"}</span>
           </button>;
@@ -279,20 +385,23 @@ export default function LearningStudio({
               <h3>{program.title}</h3>
               <p>{program.summary}</p>
             </div>
-            <div className="learning-course-metrics"><span><Clock3 size={14} /> {program.lessons.length} 节</span><span><CircleCheck size={14} /> {completedLessonIds.length}/{program.lessons.length} 已完成</span></div>
+            <div className="learning-course-metrics"><span>第 {program.version} 版</span><span><Clock3 size={14} /> {program.lessons.length} 节</span><span><CircleCheck size={14} /> {completedLessonIds.length}/{program.lessons.length} 已完成</span></div>
             <div className="learning-outcomes">{program.outcomes.map((outcome) => <span key={outcome}>{outcome}</span>)}</div>
           </div>
 
           <div className="learning-course-grid">
             <aside className="learning-passport" aria-label="课程章节">
-              <div className="learning-passport-intro"><span>学习路线</span><p>{program.cadence}</p></div>
+              <div className="learning-passport-intro"><span>学习路线</span><p>{program.cadence}</p>
+                <button className="learning-retry-lesson" type="button" disabled={isRetryingLesson || isGrading} onClick={() => void retryLesson("course")}><RotateCcw size={15} /> 重新生成课程</button>
+                <p>复用已填目标资料，重新规划课名、顺序及首课。</p>
+              </div>
               <div className="learning-lesson-list">
                 {program.lessons.map((lesson) => {
                   const isActive = lesson.id === activeLesson.id;
                   const isDone = completedLessonIds.includes(lesson.id);
                   return <button key={lesson.id} className={`learning-lesson-link ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""} ${lesson.generationStatus !== "ready" ? "is-planned" : ""}`} onClick={() => chooseLesson(lesson)}>
                     <span className="learning-lesson-index">{isDone ? <Check size={13} /> : String(lesson.order).padStart(2, "0")}</span>
-                    <span><small>{lesson.phase}</small><strong>{lesson.title}</strong><em>{lesson.generationStatus === "ready" ? `${lesson.durationMinutes} 分钟` : "待前一节通过后生成"}</em></span>
+                    <span><small>{lesson.phase}</small><strong>{lesson.title}</strong><em>{lesson.generationStatus === "ready" ? `${lesson.durationMinutes} 分钟` : lesson.status === "locked" ? "待前一节通过后解锁" : lesson.generationStatus === "failed" ? "生成未完成 · 可重试" : "已解锁 · 点击进入生成"}</em></span>
                     <ChevronRight size={15} />
                   </button>;
                 })}
@@ -304,33 +413,48 @@ export default function LearningStudio({
                 <div><span>第 {activeLesson.order} 节 · {activeLesson.phase}</span><h3>{activeLesson.title}</h3><p>{activeLesson.objective}</p></div>
                 <div className={`learning-complete-button ${completedLessonIds.includes(activeLesson.id) ? "is-complete" : ""}`} role="status">
                   {completedLessonIds.includes(activeLesson.id)
-                    ? <><Check size={15} /> 已完成 · {grades[activeLesson.id]?.level || "合格"}</>
-                    : grades[activeLesson.id]
-                      ? <><CircleCheck size={15} /> 尚未合格 · {grades[activeLesson.id].score} 分</>
+                    ? <><Check size={15} /> 已完成{activeGrade?.passed && <> · {activeGrade.level}</>}</>
+                    : activeGrade
+                      ? <><CircleCheck size={15} /> 尚未合格 · {activeGrade.score} 分</>
                       : <><CircleCheck size={15} /> 答题合格后完成</>}
                 </div>
               </div>
               <div className="learning-lesson-metadata" aria-label="课程内容状态">
-                <span className={activeLesson.qualityStatus === "passed" ? "is-passed" : ""}>{activeLesson.legacyContent ? "旧版课程" : activeLesson.qualityStatus === "passed" ? "质量门禁已通过" : "等待质量检查"}</span>
+                <span className={activeLesson.qualityStatus === "passed" ? "is-passed" : ""}>{activeLesson.legacyContent ? "旧版课程" : activeLesson.qualityReport?.issues.some(issue => issue.code === "demo_semantic_review") ? "演示内容 · 未经模型复核" : activeLesson.qualityStatus === "passed" ? "质量门禁已通过" : "等待质量检查"}</span>
                 <span>{sourceStatusLabel(activeLesson.sourceStatus)}</span>
                 {activeLesson.capabilityType && <span>{capabilityLabel(activeLesson.capabilityType)}</span>}
               </div>
+              {program.goalId && <GoalSourceScopeButton key={program.goalId} goalId={program.goalId} goalTitle={program.title} />}
               {/* 有结构化教学块时，块标题本身就是大纲，再列一排概念标签只是重复。 */}
+              {!!activeLesson.sources?.length && <details className="learning-source-details">
+                <summary>查看本节资料依据（{activeLesson.sources.length}）</summary>
+                {activeLesson.sources.map((source) => <section key={source.chunkId}>
+                  <strong>{source.sourceTitle}</strong>
+                  <p>{source.heading}{source.pageStart !== null ? ` · 第 ${source.pageStart}${source.pageEnd !== null && source.pageEnd !== source.pageStart ? `–${source.pageEnd}` : ""} 页` : ""}</p>
+                  <blockquote>{source.excerpt}</blockquote>
+                  <small>用于：{activeLesson.blocks?.filter((block) => block.sourceChunkIds?.includes(source.chunkId)).map((block) => block.title).join("、")}</small>
+                </section>)}
+              </details>}
               {!activeLesson.blocks?.length && activeLesson.concepts.length > 0
                 && <div className="learning-concepts">{activeLesson.concepts.map((concept) => <span key={concept}>{concept}</span>)}</div>}
 
+              {retryFailure?.lessonId === activeLesson.id && <div className="learning-error" role="alert"><strong>本次重新生成未完成：</strong>{retryFailure.message}<p>下方是上一次保存的课程报告，不代表本次失败原因。</p></div>}
+              <LessonQualityDetails key={`${activeLesson.id}:${activeLesson.contentVersionId || "none"}`} lesson={activeLesson} />
               {activeLesson.generationStatus !== "ready" ? <section className="learning-planned-placeholder">
                 <span className="eyebrow">ADAPTIVE LESSON</span>
                 {activeLesson.generationStatus === "failed" ? <>
-                  <h4><CircleAlert size={17} /> 本节没有通过教学质量门禁</h4>
-                  <p>失败内容和质量报告已经保存，但不会用通用模板伪装成正式课程。可以重新生成，成功后才会开放课后考核。</p>
+                  <h4><CircleAlert size={17} /> {activeLesson.qualityReport?.issues.some(issue => issue.code === 'semantic_review_unavailable') ? '正文已保存，等待语义复核' : activeLesson.qualityReport?.issues.some(issue => issue.code === 'assessment_generation_failed') ? '正文已通过检查，巩固题尚未生成成功' : '本节生成或教学质量检查未完成'}</h4>
+                  <p>内容与具体问题已保存。审核服务异常时，重试会先保留正文、重新复核；若仅巩固题失败，则只重新出题。完成有效检查和出题后开放考核。</p>
                   <button className="learning-retry-lesson" type="button" onClick={() => void retryLesson()} disabled={isRetryingLesson}>
                     {isRetryingLesson ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
-                    {isRetryingLesson ? "正在重新生成" : "重新生成本节"}
+                    {isRetryingLesson ? "正在处理" : activeLesson.qualityReport?.issues.some(issue => issue.code === 'semantic_review_unavailable') ? "保留正文，重试复核" : activeLesson.qualityReport?.issues.some(issue => issue.code === 'assessment_generation_failed') ? "保留正文，重试巩固题" : "重试本节生成"}
                   </button>
                 </> : <>
-                  <h4>本节先保留路线，不提前生成正文</h4>
-                  <p>通过前一节的导师考核后，系统会根据最新掌握度生成本节讲解、练习和巩固题，避免整套课程一开始就固定。</p>
+                  <h4>{activeLesson.status === "locked" ? "本节先保留路线，不提前生成正文" : "本节已解锁，可以开始生成"}</h4>
+                  <p>{activeLesson.status === "locked" ? "通过前一节的导师考核后，才能生成本节讲解、练习和巩固题。" : "上一节成绩已保存。点击后根据最新掌握度生成本节内容，并显示详细进度；生成失败不影响已保存成绩，可以在这里重试。"}</p>
+                  {activeLesson.status !== "locked" && activeLesson.status !== "archived" && <button className="learning-retry-lesson" type="button" onClick={() => void retryLesson()} disabled={isRetryingLesson || isGrading}>
+                    <Sparkles size={15} /> 生成本节并开始学习
+                  </button>}
                 </>}
               </section> : <>
               {activeLesson.blocks?.length ? <LessonReader
@@ -339,11 +463,13 @@ export default function LearningStudio({
                 pages={buildLessonPages(activeLesson)}
                 onAddLesson={onAddLesson}
                 checkSlot={<section className="learning-quiz-block">
-                  <div className="learning-quiz-heading"><div><span>课后理解检查</span><h4>先答，再看反馈。</h4></div><button onClick={() => void gradeLesson()} disabled={isGrading}>{isGrading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{grades[activeLesson.id] ? "重新评分" : "请老师评分"}</button></div>
+                  <div className="learning-quiz-heading"><div><span>课后理解检查</span><h4>先答，再看反馈。</h4></div><button onClick={() => void gradeLesson()} disabled={isGrading || !draft.loaded}>{isGrading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{activeGrade ? "重新评分" : "请老师评分"}</button></div>
+                  {draftStatus}
                   <div className="learning-question-list">
-                    {activeLesson.questions.map((question, index) => <label className="learning-question" key={question.id}><span>{String(index + 1).padStart(2, "0")} · {question.kind}{question.taughtBlockIds?.length ? ` · 对应 ${question.taughtBlockIds.length} 个教学块` : ""}</span><strong>{question.prompt}</strong><small>{question.hint}</small><textarea value={answers[question.id] || ""} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} placeholder="用自己的话写下理解，不需要写得很长。" rows={3} /></label>)}
+                    {activeLesson.questions.map((question, index) => <div className="learning-question" key={question.id}><span>{String(index + 1).padStart(2, "0")} · {question.kind}{question.taughtBlockIds?.length ? ` · 对应 ${question.taughtBlockIds.length} 个教学块` : ""}</span><QuestionText text={question.prompt}/><details className="question-hint"><summary>查看提示</summary><QuestionText text={question.hint}/></details><textarea aria-label={`第 ${index+1} 题答案`} value={answers[question.id] || ""} onChange={event=>draft.setAnswer(question.id,event.target.value)} disabled={!draft.loaded || isGrading} maxLength={3000} placeholder="用自己的话写下理解，不需要写得很长。" rows={3} /></div>)}
                   </div>
-                  {grades[activeLesson.id] && <GradeCard grade={grades[activeLesson.id]} questions={activeLesson.questions} />}
+                  {activeGrade && <GradeCard grade={activeGrade} questions={activeLesson.questions} />}
+                  {activeGrade?.passed && activeGrade.nextLessonId && <button className="learning-retry-lesson" type="button" onClick={() => { const next = program.lessons.find(item => item.id === activeGrade.nextLessonId); if (next) void chooseLesson(next); }}>成绩已保存，进入下一课 <ChevronRight size={15} /></button>}
                 </section>}
                 tutorSlot={<>
                   <section className="learning-instructor-card">
@@ -361,11 +487,13 @@ export default function LearningStudio({
               </div>
 
               <section className="learning-quiz-block">
-                <div className="learning-quiz-heading"><div><span>课后理解检查</span><h4>先答，再看反馈。</h4></div><button onClick={() => void gradeLesson()} disabled={isGrading}>{isGrading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{grades[activeLesson.id] ? "重新评分" : "请老师评分"}</button></div>
+                <div className="learning-quiz-heading"><div><span>课后理解检查</span><h4>先答，再看反馈。</h4></div><button onClick={() => void gradeLesson()} disabled={isGrading || !draft.loaded}>{isGrading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{activeGrade ? "重新评分" : "请老师评分"}</button></div>
+                {draftStatus}
                 <div className="learning-question-list">
-                  {activeLesson.questions.map((question, index) => <label className="learning-question" key={question.id}><span>{String(index + 1).padStart(2, "0")} · {question.kind}{question.taughtBlockIds?.length ? ` · 对应 ${question.taughtBlockIds.length} 个教学块` : ""}</span><strong>{question.prompt}</strong><small>{question.hint}</small><textarea value={answers[question.id] || ""} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} placeholder="用自己的话写下理解，不需要写得很长。" rows={3} /></label>)}
+                  {activeLesson.questions.map((question, index) => <div className="learning-question" key={question.id}><span>{String(index + 1).padStart(2, "0")} · {question.kind}{question.taughtBlockIds?.length ? ` · 对应 ${question.taughtBlockIds.length} 个教学块` : ""}</span><QuestionText text={question.prompt}/><details className="question-hint"><summary>查看提示</summary><QuestionText text={question.hint}/></details><textarea aria-label={`第 ${index+1} 题答案`} value={answers[question.id] || ""} onChange={event=>draft.setAnswer(question.id,event.target.value)} disabled={!draft.loaded || isGrading} maxLength={3000} placeholder="用自己的话写下理解，不需要写得很长。" rows={3} /></div>)}
                 </div>
-                {grades[activeLesson.id] && <GradeCard grade={grades[activeLesson.id]} questions={activeLesson.questions} />}
+                {activeGrade && <GradeCard grade={activeGrade} questions={activeLesson.questions} />}
+                {activeGrade?.passed && activeGrade.nextLessonId && <button className="learning-retry-lesson" type="button" onClick={() => { const next = program.lessons.find(item => item.id === activeGrade.nextLessonId); if (next) void chooseLesson(next); }}>成绩已保存，进入下一课 <ChevronRight size={15} /></button>}
               </section>
 
               {/* 旧版课程没有分页，正文和考核同屏，导师区只能常驻。 */}
@@ -567,5 +695,10 @@ function LessonReader({ lesson, pages, onAddLesson, checkSlot, tutorSlot }: {
 }
 
 function GradeCard({ grade, questions }: { grade: CourseLessonGrade; questions: CourseLesson["questions"] }) {
-  return <section className="learning-grade-card"><div className="learning-grade-score"><span>本节理解度</span><strong>{grade.score}</strong><em>/ 100</em></div><div className="learning-grade-summary"><strong>{grade.summary}</strong><p>下一步：{grade.nextStep}</p><small>第 {grade.attemptNumber} 次评测 · {grade.level}</small></div><div className="learning-grade-feedback">{grade.feedback.map((item, index) => <div key={item.questionId}><span>{questions[index]?.kind || "问题"} · {item.score} 分</span><p>{item.feedback}</p><small>参考答案：{item.reference}</small></div>)}</div><button className="learning-grade-reset" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><RotateCcw size={14} /> 回到本节开头</button></section>;
+  return <section className="learning-grade-card">
+    <div className="learning-grade-score"><span>{grade.gradedBy === 'rules' ? '规则演示估分' : '本次答题评分'}</span><strong>{grade.score}</strong><em>/ 100</em></div>
+    <div className="learning-grade-summary"><strong>{grade.summary}</strong><p>下一步：{grade.nextStep}</p><small>第 {grade.attemptNumber} 次评测 · {grade.level}{grade.gradedBy === 'rules' && ' · 演示结果，不代表真实掌握度'}</small></div>
+    <div className="learning-grade-feedback">{grade.feedback.map(item => <div key={item.questionId}><span>{questions.find(question => question.id === item.questionId)?.kind || "问题"} · {item.score} 分</span><p>{item.feedback}</p><small>参考答案：{item.reference}</small></div>)}</div>
+    <button className="learning-grade-reset" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><RotateCcw size={14} /> 回到本节开头</button>
+  </section>;
 }

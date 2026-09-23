@@ -3,6 +3,9 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { readAuthoredDiagnostic, readDiagnosticResult, recordAgentRun, recordDiagnosticAttempt } from "@/lib/db/learning-loop";
 import { answerAdaptiveDiagnostic } from "@/lib/learning-loop/adaptive-diagnostic";
 import { generateCourseForGoal } from "@/lib/learning-loop/service";
+import { resumeGoalOnboardingAfterDiagnostic } from "@/lib/workflow/goal-onboarding";
+import { workflowServiceConfigured } from "@/lib/workflow/client";
+import { SourceSelectionRequired } from "@/lib/learning-loop/lesson-evidence";
 
 export const runtime = "nodejs";
 
@@ -27,10 +30,17 @@ function streamAdaptiveAnswer(input: {
         const result = await answerAdaptiveDiagnostic({
           ...input,
           reporter: (progress) => send({ type: "progress", progress }),
+          ...(workflowServiceConfigured() ? {
+            courseBuilder: (goalId, reporter) => resumeGoalOnboardingAfterDiagnostic({
+              userId: input.userId,
+              goalId,
+              reporter,
+            }),
+          } : {}),
         });
         send({ type: "result", result });
       } catch (error) {
-        send({ type: "error", error: error instanceof Error ? error.message : "诊断评分失败。" });
+        send({ type: error instanceof SourceSelectionRequired ? "needs_sources" : "error", error: error instanceof Error ? error.message : "诊断评分失败。" });
       } finally {
         controller.close();
       }
@@ -63,7 +73,9 @@ export async function POST(request: Request) {
     if (found.assessment.adaptive) return Response.json({ error: "自适应诊断需要逐题提交。" }, { status: 409 });
     if (found.assessment.status === "completed") {
       const grade = readDiagnosticResult(user.id, assessmentId);
-      const program = await generateCourseForGoal(user.id, found.assessment.goalId);
+      const program = workflowServiceConfigured()
+        ? await resumeGoalOnboardingAfterDiagnostic({ userId: user.id, goalId: found.assessment.goalId })
+        : await generateCourseForGoal(user.id, found.assessment.goalId);
       if (!grade) return Response.json({ error: "诊断已完成，但结果暂时无法读取。" }, { status: 409 });
       return Response.json({ grade, program, replayed: true });
     }
@@ -73,7 +85,9 @@ export async function POST(request: Request) {
     const result = await gradeDiagnostic({ questions: found.questions, answers });
     recordAgentRun({ userId: user.id, goalId: found.assessment.goalId, agentType: "examiner", nodeName: "grade_initial_diagnostic", request: { assessmentId, answers }, result });
     const grade = recordDiagnosticAttempt({ userId: user.id, assessmentId, answers, grade: result.data });
-    const program = await generateCourseForGoal(user.id, found.assessment.goalId);
+    const program = workflowServiceConfigured()
+      ? await resumeGoalOnboardingAfterDiagnostic({ userId: user.id, goalId: found.assessment.goalId })
+      : await generateCourseForGoal(user.id, found.assessment.goalId);
     return Response.json({ grade, program });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "诊断提交失败。" }, { status: 400 });

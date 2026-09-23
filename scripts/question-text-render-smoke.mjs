@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import ts from 'typescript';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+const source=readFileSync(new URL('../app/question-text.tsx',import.meta.url),'utf8');
+const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+const exports={};new Function('require','exports',compiled)(createRequire(import.meta.url),exports);
+const render=text=>renderToStaticMarkup(React.createElement(exports.default,{text}));
+const html=render('阅读 `value`。\n\n```java\nint value = 1;\n  // 保留缩进\n```\n\n1. 解释输出\n2. 说明理由');
+assert(html.includes('<pre'));assert(html.includes('  // 保留缩进'));assert(html.includes('<code>value</code>'));assert(html.includes('2. 说明理由'));assert(!html.includes('```'));
+assert(render('{role: "tool",\n content: "result"}').includes('<pre'),'legacy trace uses code panel');
+assert(!render('<script>alert(1)</script>').includes('<script>'),'generated HTML stays escaped');
+assert(render('```text\n<svg onload=alert(1)>\n```').includes('&lt;svg'));
+console.log('PASS: paragraph/newline/indent preservation, fenced and legacy trace code, inline code, HTML escaping.');

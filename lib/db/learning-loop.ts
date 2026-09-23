@@ -405,6 +405,6 @@ export function recordAgentRun(input: {
     JSON.stringify(input.request), JSON.stringify(input.result.data), input.result.provider, input.result.model,
     input.result.usage.promptTokens, input.result.usage.completionTokens, input.result.usage.totalTokens,
     input.result.latencyMs, input.result.mode === "llm" ? "completed" : "fallback",
-    input.result.fallbackReason, now, now,
+    [input.result.fallbackReason,...(input.result.validationErrors?.length ? [(input.result.mode==='llm'?'已修复：':'未修复：')+input.result.validationErrors.join('；')] : [])].filter(Boolean).join('；').slice(0,2000), now, now,
   );
 }

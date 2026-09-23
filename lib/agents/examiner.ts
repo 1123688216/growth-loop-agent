@@ -1,4 +1,4 @@
-import { asRecord, cleanText, requestStructured } from "@/lib/agents/shared";
+import { asRecord, cleanText, isExplicitDemoMode, requestStructured } from "@/lib/agents/shared";
 import type {
   AdaptiveAnswerGradeDraft,
   AssessmentGradeDraft,
@@ -138,12 +138,16 @@ export async function gradeAdaptiveAnswer(input: { question: DiagnosticQuestionD
   };
   const result = await requestStructured({
     fallback,
+    disableThinking: true,
+    repairValidation: true,
     system: "你是自适应诊断考官。仅依据当前题目、固定参考答案、rubric 和用户本题作答评分。不要教学式放宽标准，不因表达长度加分。只输出严格 JSON。",
     user: `题目：${JSON.stringify(input.question)}\n用户作答：${JSON.stringify(input.answer)}\n输出 score（0-10 整数）、feedback（指出已证明和未证明的能力）、evidenceSummary（不超过120字）。`,
     normalize(raw) {
-      const numericScore = Number(raw.score);
+      const numericScore = raw.score;
+      if (typeof numericScore !== 'number' || !Number.isFinite(numericScore) || numericScore < 0
+        || numericScore > input.question.maxScore || !cleanText(raw.feedback) || !cleanText(raw.evidenceSummary)) return null;
       return {
-        score: Number.isFinite(numericScore) ? Math.max(0, Math.min(10, Math.round(numericScore))) : fallback.score,
+        score: input.answer.trim() ? Math.round(numericScore) : 0,
         feedback: cleanText(raw.feedback, fallback.feedback, 700),
         evidenceSummary: cleanText(raw.evidenceSummary, fallback.evidenceSummary, 300),
         gradedBy: "rules" as const,
@@ -152,6 +156,9 @@ export async function gradeAdaptiveAnswer(input: { question: DiagnosticQuestionD
       };
     },
   });
+  if (result.mode !== 'llm' && !(isExplicitDemoMode() && result.fallbackReason === 'llm_disabled')) {
+    throw new Error(`诊断评分未完成：${result.fallbackReason}。本题未计分、未更新能力上下界，请保留答案后重试。`);
+  }
   return { ...result, data: { ...result.data, gradedBy: result.mode, provider: result.provider, model: result.model } };
 }
 

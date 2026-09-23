@@ -90,6 +90,7 @@ export type AdaptiveAnswerGradeDraft = {
 };
 
 export type TutorLessonInput = {
+  groundedContext?: import("@/lib/learning-program/types").GroundedTutorContext;
   goal: GoalContext;
   skill: PersistedSkill;
   lesson: CourseOutlineDraft["lessons"][number];

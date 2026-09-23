@@ -1,4 +1,7 @@
-export const DATABASE_SCHEMA_VERSION = 7;
+import { KNOWLEDGE_CHUNK_SUPPORT_SCHEMA, SOURCE_CHUNKS_SCHEMA } from "./knowledge-schema.ts";
+import { EMBEDDING_SCHEMA } from "./embedding-schema.ts";
+
+export const DATABASE_SCHEMA_VERSION = 17;
 
 /**
  * 给已存在的表加列：`CREATE TABLE IF NOT EXISTS` 对已建好的表会整条跳过，
@@ -23,9 +26,60 @@ export const COLUMN_ADDITIONS: Array<{ table: string; column: string; ddl: strin
   { table: "course_lessons", column: "completion_evidence_json", ddl: "ALTER TABLE course_lessons ADD COLUMN completion_evidence_json TEXT NOT NULL DEFAULT '[]'" },
   { table: "lesson_assessment_attempts", column: "content_version_id", ddl: "ALTER TABLE lesson_assessment_attempts ADD COLUMN content_version_id TEXT" },
   { table: "lesson_assessment_attempts", column: "questions_json", ddl: "ALTER TABLE lesson_assessment_attempts ADD COLUMN questions_json TEXT NOT NULL DEFAULT '[]'" },
+  { table: "retrieval_runs", column: "lesson_id", ddl: "ALTER TABLE retrieval_runs ADD COLUMN lesson_id TEXT REFERENCES course_lessons(id) ON DELETE SET NULL" },
+  { table: "retrieval_runs", column: "skill_id", ddl: "ALTER TABLE retrieval_runs ADD COLUMN skill_id TEXT REFERENCES goal_skills(id) ON DELETE SET NULL" },
+  { table: "retrieval_runs", column: "retrieval_mode", ddl: "ALTER TABLE retrieval_runs ADD COLUMN retrieval_mode TEXT NOT NULL DEFAULT 'fts5'" },
+  { table: "retrieval_runs", column: "max_evidence_tokens", ddl: "ALTER TABLE retrieval_runs ADD COLUMN max_evidence_tokens INTEGER NOT NULL DEFAULT 2000" },
+  { table: "retrieval_runs", column: "total_evidence_tokens", ddl: "ALTER TABLE retrieval_runs ADD COLUMN total_evidence_tokens INTEGER NOT NULL DEFAULT 0" },
+  { table: "retrieval_runs", column: "insufficiency_reason", ddl: "ALTER TABLE retrieval_runs ADD COLUMN insufficiency_reason TEXT NOT NULL DEFAULT ''" },
+  { table: "retrieval_run_items", column: "snapshot_text", ddl: "ALTER TABLE retrieval_run_items ADD COLUMN snapshot_text TEXT NOT NULL DEFAULT ''" },
+  { table: "retrieval_run_items", column: "snapshot_hash", ddl: "ALTER TABLE retrieval_run_items ADD COLUMN snapshot_hash TEXT NOT NULL DEFAULT ''" },
+  { table: "question_source_links", column: "lesson_content_version_id", ddl: "ALTER TABLE question_source_links ADD COLUMN lesson_content_version_id TEXT REFERENCES lesson_content_versions(id) ON DELETE CASCADE" },
+  { table: "question_source_links", column: "retrieval_run_id", ddl: "ALTER TABLE question_source_links ADD COLUMN retrieval_run_id TEXT REFERENCES retrieval_runs(id) ON DELETE CASCADE" },
+  { table: "question_source_links", column: "source_snapshot_hash", ddl: "ALTER TABLE question_source_links ADD COLUMN source_snapshot_hash TEXT NOT NULL DEFAULT ''" },
+  { table: "knowledge_sources", column: "description", ddl: "ALTER TABLE knowledge_sources ADD COLUMN description TEXT NOT NULL DEFAULT ''" },
+  { table: "knowledge_sources", column: "active_chunk_set_id", ddl: "ALTER TABLE knowledge_sources ADD COLUMN active_chunk_set_id TEXT REFERENCES source_chunk_sets(id) ON DELETE SET NULL" },
+  { table: "retrieval_runs", column: "pipeline_run_id", ddl: "ALTER TABLE retrieval_runs ADD COLUMN pipeline_run_id TEXT REFERENCES pipeline_runs(id) ON DELETE SET NULL" },
+  { table: "retrieval_runs", column: "embedding_profile_id", ddl: "ALTER TABLE retrieval_runs ADD COLUMN embedding_profile_id TEXT REFERENCES embedding_profiles(id) ON DELETE SET NULL" },
+  { table: "goal_learning_profiles", column: "source_scope_mode", ddl: "ALTER TABLE goal_learning_profiles ADD COLUMN source_scope_mode TEXT NOT NULL DEFAULT 'auto' CHECK (source_scope_mode IN ('auto', 'selected'))" },
 ];
 
 export const DATABASE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS lesson_answer_drafts (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    lesson_id TEXT NOT NULL REFERENCES course_lessons(id) ON DELETE CASCADE,
+    question_fingerprint TEXT NOT NULL,
+    answers_json TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, lesson_id, question_fingerprint)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS web_research_runs (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    query TEXT NOT NULL, created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS web_research_actions (
+    run_id TEXT NOT NULL REFERENCES web_research_runs(id) ON DELETE CASCADE,
+    action_key TEXT NOT NULL, result_json TEXT NOT NULL,
+    PRIMARY KEY(run_id, action_key)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS web_search_candidates (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    query TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL, snippet TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS web_source_imports (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    url TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    fetched_at TEXT NOT NULL, PRIMARY KEY(user_id, url)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS web_page_reviews (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    cache_key TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, cache_key)
+  ) STRICT;
   PRAGMA foreign_keys = ON;
 
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -153,6 +207,7 @@ export const DATABASE_SCHEMA = `
     diagnostic_status TEXT NOT NULL DEFAULT 'skipped' CHECK (diagnostic_status IN ('skipped', 'pending', 'in_progress', 'completed', 'failed')),
     diagnostic_score INTEGER CHECK (diagnostic_score IS NULL OR diagnostic_score BETWEEN 0 AND 100),
     baseline_summary TEXT NOT NULL DEFAULT '',
+    source_scope_mode TEXT NOT NULL DEFAULT 'auto' CHECK (source_scope_mode IN ('auto', 'selected')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT;
@@ -452,6 +507,29 @@ export const DATABASE_SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_status ON workflow_runs(user_id, status, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_workflow_runs_goal ON workflow_runs(goal_id, started_at DESC);
 
+  CREATE TABLE IF NOT EXISTS workflow_events (
+    id TEXT PRIMARY KEY,
+    workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    event_index INTEGER NOT NULL CHECK (event_index >= 1),
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'progress', 'action_requested', 'action_completed', 'waiting', 'completed', 'failed'
+    )),
+    node_name TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_run_id, event_index)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_workflow_events_run
+    ON workflow_events(workflow_run_id, event_index);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_action_result
+    ON workflow_events(workflow_run_id, idempotency_key)
+    WHERE event_type = 'action_completed' AND idempotency_key != '';
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_idempotency
+    ON workflow_events(workflow_run_id, idempotency_key)
+    WHERE idempotency_key != '';
+
   CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -476,4 +554,143 @@ export const DATABASE_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_agent_runs_user_time ON agent_runs(user_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_agent_runs_workflow ON agent_runs(workflow_run_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS knowledge_sources (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('text', 'txt', 'pdf', 'docx')),
+    original_filename TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    byte_size INTEGER NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+    content_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'processing'
+      CHECK (status IN ('processing', 'ready', 'ocr_required', 'failed', 'deleted')),
+    parser_version TEXT NOT NULL DEFAULT '',
+    current_version_id TEXT,
+    active_chunk_set_id TEXT REFERENCES source_chunk_sets(id) ON DELETE SET NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 0 CHECK (chunk_count >= 0),
+    char_count INTEGER NOT NULL DEFAULT 0 CHECK (char_count >= 0),
+    warning_message TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_knowledge_sources_user_status
+    ON knowledge_sources(user_id, status, updated_at DESC);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_sources_user_hash_active
+    ON knowledge_sources(user_id, content_hash) WHERE status != 'deleted';
+
+  CREATE TABLE IF NOT EXISTS source_versions (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL CHECK (version >= 1),
+    raw_blob BLOB NOT NULL,
+    extracted_text TEXT NOT NULL DEFAULT '',
+    text_hash TEXT NOT NULL DEFAULT '',
+    parser_version TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('ready', 'ocr_required', 'failed')),
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    UNIQUE(source_id, version)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_source_versions_source
+    ON source_versions(source_id, version DESC);
+
+  ${KNOWLEDGE_CHUNK_SUPPORT_SCHEMA}
+  ${SOURCE_CHUNKS_SCHEMA}
+  ${EMBEDDING_SCHEMA}
+
+  CREATE TABLE IF NOT EXISTS goal_source_links (
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (goal_id, source_id)
+  ) WITHOUT ROWID, STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_goal_source_links_user
+    ON goal_source_links(user_id, goal_id, status);
+
+  CREATE TABLE IF NOT EXISTS retrieval_runs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+    lesson_id TEXT REFERENCES course_lessons(id) ON DELETE SET NULL,
+    skill_id TEXT REFERENCES goal_skills(id) ON DELETE SET NULL,
+    agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    pipeline_run_id TEXT REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+    embedding_profile_id TEXT REFERENCES embedding_profiles(id) ON DELETE SET NULL,
+    tool_name TEXT NOT NULL DEFAULT 'search_knowledge_base',
+    retrieval_mode TEXT NOT NULL DEFAULT 'fts5',
+    query TEXT NOT NULL,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    top_k INTEGER NOT NULL DEFAULT 5 CHECK (top_k BETWEEN 1 AND 50),
+    max_evidence_tokens INTEGER NOT NULL DEFAULT 2000 CHECK (max_evidence_tokens BETWEEN 100 AND 20000),
+    result_count INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
+    total_evidence_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_evidence_tokens >= 0),
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    insufficiency_reason TEXT NOT NULL DEFAULT '',
+    latency_ms INTEGER NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
+    created_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_retrieval_runs_user_time
+    ON retrieval_runs(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS retrieval_run_items (
+    id TEXT PRIMARY KEY,
+    retrieval_run_id TEXT NOT NULL REFERENCES retrieval_runs(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    source_version_id TEXT NOT NULL REFERENCES source_versions(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES source_chunks(id) ON DELETE CASCADE,
+    rank INTEGER NOT NULL CHECK (rank >= 1),
+    score REAL NOT NULL,
+    excerpt TEXT NOT NULL DEFAULT '',
+    snapshot_text TEXT NOT NULL DEFAULT '',
+    snapshot_hash TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(retrieval_run_id, rank)
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS idx_retrieval_items_run
+    ON retrieval_run_items(retrieval_run_id, rank);
+
+  CREATE TABLE IF NOT EXISTS knowledge_gates (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    decision_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new',
+    rag_count INTEGER NOT NULL DEFAULT 0 CHECK(rag_count BETWEEN 0 AND 2),
+    web_count INTEGER NOT NULL DEFAULT 0 CHECK(web_count BETWEEN 0 AND 1),
+    page_count INTEGER NOT NULL DEFAULT 0 CHECK(page_count BETWEEN 0 AND 3),
+    evidence_json TEXT NOT NULL DEFAULT 'null', source_fingerprint TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS knowledge_gate_candidates (
+    gate_id TEXT NOT NULL REFERENCES knowledge_gates(id) ON DELETE CASCADE,
+    candidate_id TEXT NOT NULL REFERENCES web_search_candidates(id) ON DELETE CASCADE,
+    PRIMARY KEY(gate_id,candidate_id)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS question_source_links (
+    question_type TEXT NOT NULL CHECK (question_type IN ('diagnostic', 'lesson')),
+    question_id TEXT NOT NULL,
+    lesson_content_version_id TEXT REFERENCES lesson_content_versions(id) ON DELETE CASCADE,
+    retrieval_run_id TEXT REFERENCES retrieval_runs(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+    source_version_id TEXT NOT NULL REFERENCES source_versions(id) ON DELETE CASCADE,
+    chunk_id TEXT NOT NULL REFERENCES source_chunks(id) ON DELETE CASCADE,
+    source_snapshot_hash TEXT NOT NULL DEFAULT '',
+    support_type TEXT NOT NULL DEFAULT 'supports'
+      CHECK (support_type IN ('supports', 'contradicts', 'example')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (question_type, question_id, chunk_id)
+  ) WITHOUT ROWID, STRICT;
 `;

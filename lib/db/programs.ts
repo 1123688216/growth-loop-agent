@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { syncCourseTasks } from './course-tasks.ts';
+import { isExplicitDemoMode } from "../agents/shared.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 import { getDatabase, withTransaction } from "@/lib/db";
@@ -149,6 +151,7 @@ function toAuthoredLesson(row: LessonRow): AuthoredCourseLesson {
     prerequisites: parseList(row.prerequisites_json),
     completionEvidence: contentVersion?.content.evidenceRequirements.map((item) => item.description) || parseList(row.completion_evidence_json),
     blocks: contentVersion?.content.blocks || [],
+    sources: contentVersion?.content.sources || [],
     contentVersionId: contentVersion?.content.contentVersionId,
     sourceStatus: contentVersion?.content.sourceStatus || row.source_status,
     qualityStatus: row.quality_status,
@@ -164,6 +167,13 @@ function toPublicLesson(lesson: AuthoredCourseLesson): CourseLesson {
   void _contentVersions;
   return {
     ...publicLesson,
+    qualityReport: _contentVersion ? {
+      score: _contentVersion.qualityReport.score,
+      issues: _contentVersion.qualityReport.issues,
+      checkedAt: _contentVersion.qualityReport.checkedAt,
+      deterministicPassed: _contentVersion.qualityReport.deterministicPassed,
+      semanticPassed: _contentVersion.qualityReport.semanticPassed,
+    } : null,
     questions: lesson.questions.map(({ id, skillId, kind, contentVersionId, taughtBlockIds, evidenceType, expectedConcepts, prompt, hint, maxScore }) => ({
       id, skillId, kind, contentVersionId, taughtBlockIds, evidenceType, expectedConcepts, prompt, hint, maxScore,
     })),
@@ -220,12 +230,14 @@ function persistContentVersions(database: DatabaseSync, lessonId: string, versio
       draft.qualityReport.checkedAt || now,
     );
     for (const block of content.blocks) {
-      for (const sourceRef of content.sourceRefs) {
+      for (const sourceRef of block.sourceChunkIds || []) {
+        const source = content.sources?.find((item) => item.chunkId === sourceRef);
+        if (!source) continue;
         database.prepare(`
           INSERT OR IGNORE INTO lesson_block_sources (
             lesson_content_version_id, block_id, source_ref, source_snapshot_hash, support_type, created_at
-          ) VALUES (?, ?, ?, '', 'supports', ?)
-        `).run(content.contentVersionId, block.id, sourceRef, now);
+          ) VALUES (?, ?, ?, ?, 'supports', ?)
+        `).run(content.contentVersionId, block.id, sourceRef, source.snapshotHash, now);
       }
     }
   });
@@ -238,7 +250,7 @@ function readLessonRows(programId: string): AuthoredCourseLesson[] {
 }
 
 /** 保存课程骨架。首节可以 ready，其余章节只保存结构和 planned 状态。 */
-export function saveLearningProgram(input: { userId: string; goalId: string; program: AuthoredLearningProgram }): LearningProgram {
+export function saveLearningProgram(input: { userId: string; goalId: string; program: AuthoredLearningProgram; replaceProgramId?: string }): LearningProgram {
   const { userId, goalId, program } = input;
   const now = new Date().toISOString();
   return withTransaction((database) => {
@@ -248,7 +260,14 @@ export function saveLearningProgram(input: { userId: string; goalId: string; pro
       SELECT ${PROGRAM_COLUMNS} FROM learning_programs WHERE goal_id = ? AND user_id = ? AND status = 'active'
       ORDER BY version DESC LIMIT 1
     `).get(goalId, userId) as ProgramRow | undefined;
-    if (existing) {
+    if (input.replaceProgramId) {
+      // Compare-and-swap inside the save transaction: failed/stale regeneration must not replace a newer course.
+      if (!existing || existing.id !== input.replaceProgramId) throw new Error("课程版本已改变，请刷新后再重新生成。");
+      database.prepare("UPDATE learning_programs SET status = 'archived', updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(now, existing.id, userId);
+      syncCourseTasks(database,userId,existing.id);
+    } else if (existing) {
+      syncCourseTasks(database,userId,existing.id);
       const lessonRows = database.prepare(`SELECT ${LESSON_COLUMNS} FROM course_lessons WHERE program_id = ? ORDER BY position`).all(existing.id) as LessonRow[];
       return toPublicProgram(existing, lessonRows.map(toAuthoredLesson));
     }
@@ -315,6 +334,12 @@ export function saveLearningProgram(input: { userId: string; goalId: string; pro
         );
       }
     });
+    if (input.replaceProgramId) {
+      // New route, new progress; historical lessons, attempts, tasks and mastery remain intact.
+      database.prepare(`UPDATE goals SET progress_percent = 0, progress_source = 'system', progress_updated_at = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?`).run(now, now, goalId, userId);
+    }
+    syncCourseTasks(database,userId,program.programId);
     const row = database.prepare(`SELECT ${PROGRAM_COLUMNS} FROM learning_programs WHERE id = ?`).get(program.programId) as ProgramRow;
     const lessons = (database.prepare(`SELECT ${LESSON_COLUMNS} FROM course_lessons WHERE program_id = ? ORDER BY position`).all(program.programId) as LessonRow[]).map(toAuthoredLesson);
     return toPublicProgram(row, lessons);
@@ -372,22 +397,24 @@ export function materializeLesson(input: {
       WHERE lesson.id = ? AND lesson.program_id = ? AND program.user_id = ?
     `).get(input.lessonId, input.programId, input.userId) as { id: string; generation_status: string } | undefined;
     if (!owned) throw new Error("找不到要生成的课程章节。");
-    if (owned.generation_status === "ready") return;
+    if (owned.generation_status === "ready") { syncCourseTasks(database,input.userId,input.programId); return; }
     const current = input.contentVersions.at(-1);
     if (!current) throw new Error("课程生成没有产生可保存的内容版本。");
     const material = projectLessonContent(current.content);
     persistContentVersions(database, input.lessonId, input.contentVersions);
     const ready = current.status === "ready";
     database.prepare(`
-      UPDATE course_lessons SET opening = ?, explanation = ?, example = ?, practice = ?, deliverable = ?,
+      UPDATE course_lessons SET title = ?, objective = ?, duration_minutes = ?, opening = ?, explanation = ?, example = ?, practice = ?, deliverable = ?,
         concepts_json = ?, questions_json = ?, generation_mode = ?, generation_status = ?, difficulty = ?,
         current_content_version_id = ?, source_status = ?, quality_status = ?, updated_at = ?
       WHERE id = ?
-    `).run(material.opening, material.explanation, material.example, material.practice,
+    `).run(current.content.title, current.content.objective, current.content.estimatedMinutes,
+      material.opening, material.explanation, material.example, material.practice,
       material.deliverable, JSON.stringify(material.concepts), JSON.stringify(ready ? input.questions : []),
       input.mode === "llm" ? "llm" : "demo", ready ? "ready" : "failed",
       Math.max(1, Math.min(5, Math.round(input.difficulty || 3))), current.content.contentVersionId,
       current.content.sourceStatus, ready ? "passed" : "failed", now, input.lessonId);
+    syncCourseTasks(database,input.userId,input.programId);
   });
   return readLearningProgram(input.userId, input.programId)!;
 }
@@ -402,6 +429,10 @@ const DB_LEVEL: Record<CourseLessonGrade["level"], string> = { 不合格: "unqua
 /** 权威闭环事务：评分证据、掌握度、章节、关联任务、目标进度和下一课一起更新。 */
 export function recordLessonAttempt(input: { userId: string; lesson: AuthoredCourseLesson; answers: Record<string, string>; grade: CourseLessonGradeDraft }): CourseLessonGrade {
   const { userId, lesson, answers, grade } = input;
+  if (grade.gradedBy !== 'llm' && !(grade.gradedBy === 'rules' && isExplicitDemoMode() && lesson.generationMode === 'demo')) {
+    throw new Error('没有有效模型评分，不能记录为学习成绩。规则评分仅允许显式演示课程。');
+  }
+  if (!Number.isFinite(grade.score) || grade.score < 0 || grade.score > 100) throw new Error('评分必须为0到100的有效数字。');
   if (lesson.generationStatus !== "ready") throw new Error("这节课还没有生成，不能提交评测。");
   if (!lesson.legacyContent) {
     if (lesson.qualityStatus !== "passed" || !lesson.contentVersion) throw new Error("这节课还没有通过教学质量门禁，不能提交评测。");
@@ -414,11 +445,21 @@ export function recordLessonAttempt(input: { userId: string; lesson: AuthoredCou
   const now = new Date().toISOString();
   return withTransaction((database) => {
     const owned = database.prepare(`
-      SELECT lesson.program_id, lesson.position FROM course_lessons AS lesson
+      SELECT lesson.program_id, lesson.position, lesson.current_content_version_id, lesson.questions_json,
+        lesson.generation_status, lesson.status FROM course_lessons AS lesson
       JOIN learning_programs AS program ON program.id = lesson.program_id
       WHERE lesson.id = ? AND program.user_id = ?
-    `).get(lesson.id, userId) as { program_id: string; position: number } | undefined;
+    `).get(lesson.id, userId) as { program_id: string; position: number; current_content_version_id: string | null;
+      questions_json: string; generation_status: string; status: string } | undefined;
     if (!owned) throw new Error("找不到要评分的课程章节。");
+    if (owned.generation_status !== 'ready' || ['locked','archived'].includes(owned.status)
+      || (owned.current_content_version_id || null) !== (lesson.contentVersionId || null)
+      || JSON.stringify(parseQuestions(owned.questions_json)) !== JSON.stringify(lesson.questions)) {
+      throw new Error('评分期间课程或题目已改变，或课节不可用。本次成绩未写入，请刷新课程后重试。');
+    }
+    const questionsJson = JSON.stringify(lesson.questions);
+    const repeatedEvidence = Boolean(database.prepare(`SELECT 1 FROM lesson_assessment_attempts
+      WHERE lesson_id = ? AND user_id = ? AND questions_json = ? LIMIT 1`).get(lesson.id, userId, questionsJson));
     const attemptRow = database.prepare("SELECT COALESCE(MAX(attempt_number), 0) + 1 AS next_attempt FROM lesson_assessment_attempts WHERE lesson_id = ? AND user_id = ?").get(lesson.id, userId) as { next_attempt: number };
     const attemptNumber = Number(attemptRow.next_attempt) || 1;
     const skillScores = lesson.primarySkillId ? { [lesson.primarySkillId]: score } : {};
@@ -434,7 +475,9 @@ export function recordLessonAttempt(input: { userId: string; lesson: AuthoredCou
       JSON.stringify(lesson.questions), now, now);
 
     let mastery: CourseLessonGrade["mastery"];
-    if (lesson.primarySkillId) {
+    // Re-answering the same questions (possibly after seeing the key) is practice,
+    // not an independent observation that increases confidence in mastery.
+    if (lesson.primarySkillId && !repeatedEvidence) {
       const current = database.prepare(`SELECT mastery_score, confidence, evidence_count FROM skill_mastery WHERE user_id = ? AND skill_id = ?`)
         .get(userId, lesson.primarySkillId) as { mastery_score: number; confidence: number; evidence_count: number } | undefined;
       if (current) {
@@ -464,13 +507,14 @@ export function recordLessonAttempt(input: { userId: string; lesson: AuthoredCou
         nextLessonId = next.id;
         database.prepare("UPDATE course_lessons SET status = 'available', updated_at = ? WHERE id = ? AND status = 'locked'").run(now, next.id);
       }
+      syncCourseTasks(database,userId,owned.program_id);
       const progress = database.prepare(`
         SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) AS passed
         FROM course_lessons WHERE program_id = ? AND status != 'archived'
       `).get(owned.program_id) as { total: number; passed: number };
       database.prepare(`
         UPDATE goals SET progress_percent = ?, progress_source = 'system', progress_updated_at = ?, updated_at = ?
-        WHERE id = (SELECT goal_id FROM learning_programs WHERE id = ?) AND user_id = ?
+        WHERE id = (SELECT goal_id FROM learning_programs WHERE id = ? AND status = 'active') AND user_id = ?
       `).run(Math.round((progress.passed || 0) / Math.max(1, progress.total) * 100), now, now, owned.program_id, userId);
     }
     return { ...grade, score, level, passed, attemptNumber, provider: providerLabel(grade.provider, grade.model), mastery, nextLessonId };

@@ -1,0 +1,27 @@
+# RAGFlow v0.27.2 Python backend. Model providers are deliberately not configured.
+ragflow:
+  host: 0.0.0.0
+  http_port: 9380
+mysql:
+  name: rag_flow
+  user: ragflow
+  password: '${MYSQL_PASSWORD}'
+  host: mysql
+  port: 3306
+  max_connections: 100
+  stale_timeout: 300
+  max_allowed_packet: 268435456
+minio:
+  user: ragflow
+  password: '${MINIO_PASSWORD}'
+  host: 'minio:9000'
+es:
+  hosts: 'http://es01:9200'
+  username: elastic
+  password: '${ELASTIC_PASSWORD}'
+redis:
+  db: 1
+  password: '${REDIS_PASSWORD}'
+  host: 'redis:6379'
+user_default_llm:
+  default_models: {}

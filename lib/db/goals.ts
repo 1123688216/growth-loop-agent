@@ -4,6 +4,7 @@ import { getDatabase, withTransaction } from "@/lib/db";
 import type { Goal } from "@/lib/demo-data";
 
 export type SelfLevel = "beginner" | "familiar" | "intermediate";
+export type GoalSourceScopeMode = "auto" | "selected";
 
 export const SELF_LEVELS: SelfLevel[] = ["beginner", "familiar", "intermediate"];
 
@@ -26,6 +27,7 @@ export type GoalLearningProfile = {
   diagnosticRequired?: boolean;
   diagnosticStatus?: "skipped" | "pending" | "in_progress" | "completed" | "failed";
   diagnosticScore?: number | null;
+  sourceScopeMode?: GoalSourceScopeMode;
 };
 
 /**
@@ -67,7 +69,7 @@ export function createGoalWithProfile(input: CreateGoalInput): { goal: Goal; pro
     const row = database
       .prepare("SELECT self_level, weekly_hours, background FROM goal_learning_profiles WHERE goal_id = ?")
       .get(id) as { self_level: SelfLevel; weekly_hours: number; background: string };
-    return { selfLevel: row.self_level, weeklyHours: row.weekly_hours, background: row.background };
+    return { selfLevel: row.self_level, weeklyHours: row.weekly_hours, background: row.background, sourceScopeMode: "auto" as const };
   });
 
   return {
@@ -95,6 +97,7 @@ type GoalWithProfileRow = {
   diagnostic_required: number;
   diagnostic_status: "skipped" | "pending" | "in_progress" | "completed" | "failed";
   diagnostic_score: number | null;
+  source_scope_mode: GoalSourceScopeMode;
 };
 
 export function readGoalWithProfile(userId: string, goalId: string) {
@@ -106,7 +109,8 @@ export function readGoalWithProfile(userId: string, goalId: string) {
              COALESCE(profile.background, '') AS background,
              COALESCE(profile.diagnostic_required, 0) AS diagnostic_required,
              COALESCE(profile.diagnostic_status, 'skipped') AS diagnostic_status,
-             profile.diagnostic_score
+             profile.diagnostic_score,
+             COALESCE(profile.source_scope_mode, 'auto') AS source_scope_mode
       FROM goals
       LEFT JOIN goal_learning_profiles AS profile ON profile.goal_id = goals.id
       WHERE goals.id = ? AND goals.user_id = ?
@@ -124,6 +128,7 @@ export function readGoalWithProfile(userId: string, goalId: string) {
     diagnosticRequired: row.diagnostic_required === 1,
     diagnosticStatus: row.diagnostic_status,
     diagnosticScore: row.diagnostic_score,
+    sourceScopeMode: row.source_scope_mode,
   };
 }
 

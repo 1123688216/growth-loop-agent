@@ -420,13 +420,13 @@ V0.4.2 改为：
 
 ## 2. 与后续版本的关系
 
-> 路线已在 2026-08-28 修订：V0.4.3 先实现[通用课程内容引擎与教学质量门禁](IMPLEMENTATION_PLAN_V043.md)，V0.4.4 接入可信 RAG，V0.4.5 再迁移 Pydantic AI/LangGraph。下文的框架迁移说明对应 V0.4.5。
+> 历史路线曾在 2026-08-28 决定由 V0.4.5 再迁移 Pydantic AI/LangGraph。2026-09-01 根据实际代码重新评估后，最小课程主图已提前到 V0.4.4：目标范围 RAG Tool 完成后、Tutor 接入 EvidenceBundle 前迁移。当前顺序以 [V0.4.4 资料驱动教学闭环子方案](IMPLEMENTATION_PLAN_V044_GROUNDED_TEACHING.md) 为准。
 
 服务边界已定（2026-08-27）：**Python 承担 LangGraph 工作流与 Pydantic AI 模型调用，Next.js 是数据库唯一写入方**，节点通过内部接口回调落库。详见 [V1 实施方案 §4](IMPLEMENTATION_PLAN_V1.md)。
 
 据此，本轮在 Node 侧写的东西分成三类：
 
-| 类别 | 内容 | V0.4.5 框架迁移时 |
+| 类别 | 内容 | V0.4.4 最小课程主图迁移时 |
 |---|---|---|
 | **不搬** | 前端 UI、数据库 schema、`lib/db/` 落库与事务、登录会话、权威掌握度/完成门禁计算 | 原样保留，Python 通过内部接口提交模型证据 |
 | **资产迁移** | system prompt 文本、输入输出契约、校验规则、黄金输入输出样例 | 转成 Pydantic 模型和 Python 测试 |
@@ -434,7 +434,7 @@ V0.4.2 改为：
 
 Node 侧的 Agent 层刻意做得薄——不自建重试策略、多 provider 收敛和 Token 解析器，因为 Pydantic AI 都有——就是为了压缩第三类的体积。真正贵的东西是语言无关的：system prompt 的措辞、输出该有哪些字段、校验该拦什么。这些是反复试出来的资产，`const SYSTEM = "..."` 变成 `SYSTEM = """..."""` 是复制粘贴，Pydantic 的 `Field(ge=1, le=5)` 比手写校验还短。
 
-初始诊断的业务状态和 API 已在 V0.4.2 落地；V0.4.5 再把它接入 LangGraph 的 `interrupt` 与 checkpoint。能力勾选、可行性确认和不合格后的补课重测加入后，图才同时承担多分支、暂停恢复和循环控制。
+初始诊断的业务状态和 API 已在 V0.4.2 落地；V0.4.4 将把它接入 LangGraph 的 `interrupt` 与 checkpoint，并同时承接资料覆盖分支和课程质量修复循环。补课重测等更大范围扩展仍放在后续版本。
 
 Python 节点不得把掌握度最终值直接写给数据库。它返回结构化评分证据；Next.js 在同一事务里校验题目归属、重新归一化分数、更新掌握度并执行完成门禁，避免跨服务读—算—写造成丢失更新。
 

@@ -475,6 +475,7 @@ export async function askCourseInstructor(
   context: LessonContext,
   lesson: AuthoredCourseLesson,
   message: string,
+  evidenceInstruction = '',
 ): Promise<LessonTutorReply> {
   const cleanMessage = text(message, "请带我理解这一节的关键点。", 1200);
   const fallback = fallbackTutor(lesson, cleanMessage);
@@ -485,7 +486,7 @@ export async function askCourseInstructor(
     },
     {
       role: "user",
-      content: `课程：${context.title}\n当前章节：${lesson.title}\n目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n讲解：${lesson.explanation}\n示例：${lesson.example}\n\n学习者的问题或想法：${cleanMessage}`,
+        content: `课程：${context.title}\n当前章节：${lesson.title}\n目标：${lesson.objective}\n关键概念：${lesson.concepts.join("、")}\n讲解：${lesson.explanation}\n示例：${lesson.example}\n\n学习者的问题或想法：${cleanMessage}\n证据边界：${evidenceInstruction || '只改述以上已验证内容，不增加外部事实。'}`,
     },
   ]);
   if (!llm) return fallback;

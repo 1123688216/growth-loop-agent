@@ -38,6 +38,8 @@ import LearningProfileForm from "./learning-profile-form";
 import type { QuizGrade, QuizQuestion } from "@/lib/agent/quiz";
 import type { CourseLesson, CourseLessonGrade, DiagnosticAssessment, DiagnosticGrade, DiagnosticQuestionResult, GoalPreparation, LearningProgram } from "@/lib/learning-program/types";
 import LearningStudio, { PROGRAM_STORAGE_KEY } from "./learning-studio";
+import SourceLibrary from "./source-library";
+import GoalSourceScopeButton from "./goal-source-scope";
 
 type Tab = "今日" | "计划" | "课程" | "记录" | "成长";
 
@@ -146,6 +148,7 @@ async function readGoalPreparationStream(response: Response, onProgress?: GoalCr
 }
 
 type AdaptiveDiagnosticAnswerResult = {
+  needsSources?: boolean;
   complete: boolean;
   assessment?: DiagnosticAssessment;
   questionResult?: DiagnosticQuestionResult;
@@ -176,6 +179,7 @@ async function readDiagnosticAnswerStream(response: Response, onProgress?: GoalC
       }
       return;
     }
+    if (event.type === "needs_sources") { result = {complete:true,needsSources:true}; return; }
     if (event.type === "error") throw new Error(typeof event.error === "string" ? event.error : "诊断评分失败，请稍后重试。");
     if (event.type === "result" && event.result && typeof event.result === "object") result = event.result as AdaptiveDiagnosticAnswerResult;
   };
@@ -270,6 +274,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [isQuickLogOpen, setIsQuickLogOpen] = useState(false);
   const [courseTarget, setCourseTarget] = useState<CourseTarget | null>(null);
   const [activeProgramId, setActiveProgramId] = useState("");
+  const [sourceSelectionGoal, setSourceSelectionGoal] = useState<Goal | null>(null);
   const [budget, setBudget] = useState<{ hasProfile: boolean; profile: UserLearningProfile; allocations: BudgetAllocation[] } | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [showProfileForm, setShowProfileForm] = useState(false);
@@ -281,6 +286,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
   const [diagnosticError, setDiagnosticError] = useState("");
   const [diagnosticProgress, setDiagnosticProgress] = useState<GoalCreationProgress | null>(null);
   const [diagnosticProgressEvents, setDiagnosticProgressEvents] = useState<GoalCreationProgress[]>([]);
+  const [diagnosticSourceMessage, setDiagnosticSourceMessage] = useState("");
   const [diagnosticQuestionResult, setDiagnosticQuestionResult] = useState<DiagnosticQuestionResult | null>(null);
   const quickLogRef = useRef<HTMLTextAreaElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -642,6 +648,11 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
           notify(`目标「${goal.title}」已创建，请先完成初始诊断`);
           return "diagnostic" as const;
         }
+        if (preparation.nextAction === "sources") {
+          publishProgress({stage:"complete",percent:100,message:"等待选择教学资料",status:"done"});
+          setSourceSelectionGoal(goal);
+          return "goal" as const;
+        }
         const program = preparation.program;
         if (!program) throw new Error("course unavailable");
         publishProgress({ stage: "complete", percent: 100, message: "学习路径已准备完成", status: "done" });
@@ -706,6 +717,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     setDiagnosticError("");
     setDiagnosticProgress({ stage: "start", percent: 2, message: "正在启动考官评分流程", status: "running" });
     setDiagnosticProgressEvents([]);
+    setDiagnosticSourceMessage("");
     try {
       const response = await fetch("/api/diagnostics", {
         method: "POST",
@@ -718,11 +730,13 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
         }),
       });
       const result = await readDiagnosticAnswerStream(response, (progress) => {
+        if (progress.stage === "sources") setDiagnosticSourceMessage(progress.message);
         setDiagnosticProgress(progress);
         setDiagnosticProgressEvents((current) => {
           const previous = current.at(-1);
-          if (previous?.stage === progress.stage) return [...current.slice(0, -1), progress].slice(-5);
-          return [...current, progress].slice(-5);
+          if (previous?.message === progress.message) return current;
+          if (progress.stage === 'sources') return [...current, progress].slice(-100);
+          return [...current, progress].slice(-100);
         });
       });
       if (result.questionResult) setDiagnosticQuestionResult(result.questionResult);
@@ -733,6 +747,12 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
         setDiagnosticAnswers({});
         const direction = result.questionResult?.direction === "harder" ? "难度已上调" : result.questionResult?.direction === "easier" ? "难度已下调" : "已切换到下一项能力";
         notify(`本题 ${result.questionResult?.score ?? 0}/10，${direction}`);
+        return;
+      }
+      if (result.needsSources) {
+        const goal = dashboard.goals.find(item => item.id === pendingDiagnostic.goalId);
+        if (!goal) throw new Error("诊断已保存，请从计划页继续选择资料。");
+        setPendingDiagnostic(null); setSourceSelectionGoal(goal);
         return;
       }
       if (!result.grade || !result.program) throw new Error("诊断已结束，但课程结果无法读取。");
@@ -760,12 +780,12 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
     }
   }
 
-  async function resumeGoal(goal: Goal) {
+  async function resumeGoal(goal: Goal, sourcesUpdated = false) {
     try {
       const response = await fetch("/api/learning-program", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "prepare", goalId: goal.id }),
+        body: JSON.stringify({ action: sourcesUpdated ? "resume-sources" : "prepare", goalId: goal.id }),
       });
       const result = (await response.json()) as { preparation?: GoalPreparation; error?: string };
       if (!response.ok || !result.preparation) throw new Error(result.error || "学习路径暂时不可用。");
@@ -776,6 +796,10 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
         setDiagnosticGrade(null);
         setDiagnosticError("");
         setDiagnosticQuestionResult(null);
+        return;
+      }
+      if (result.preparation.nextAction === "sources") {
+        setSourceSelectionGoal(goal);
         return;
       }
       if (!result.preparation.program) throw new Error("课程暂时不可用。");
@@ -854,6 +878,10 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
 
   return (
     <main className={`app-shell ${activeTab === "今日" ? "home-shell" : ""}`}>
+      {sourceSelectionGoal && <GoalSourceScopeButton key={sourceSelectionGoal.id} initialOpen
+        goalId={sourceSelectionGoal.id} goalTitle={sourceSelectionGoal.title}
+        onDismiss={() => setSourceSelectionGoal(null)}
+        onSaved={() => { const goal = sourceSelectionGoal; setSourceSelectionGoal(null); void resumeGoal(goal, true); }} />}
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-lockup">
           <div className="brand-mark"><Sparkles size={16} strokeWidth={2.4} /></div>
@@ -932,7 +960,13 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
           ) : activeTab === "计划" ? (
             <PlanPanel dashboard={dashboard} tasks={tasks} onSplitGoal={splitGoal} onResumeGoal={resumeGoal} onCreateGoal={createGoal} onDeleteGoal={deleteLongTermGoal} onOpenCourse={() => setActiveTab("课程")} budget={budget} onEditBudget={() => setShowProfileForm(true)} />
           ) : activeTab === "课程" ? (
-            <LearningStudio goals={dashboard.goals} onSelectGoal={resumeGoal} onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} programId={activeProgramId} targetLessonId={courseTarget?.lessonId} onLessonPassed={handleLessonPassed} />
+            <LearningStudio goals={dashboard.goals} onSelectGoal={resumeGoal} onBack={() => setActiveTab("计划")} onAddLesson={addCourseLessonToToday} programId={activeProgramId} targetLessonId={courseTarget?.lessonId} onLessonPassed={handleLessonPassed}
+              onProgramRegenerated={(program) => {
+                setActiveProgramId(program.programId);
+                setCourseTarget(null);
+                setDashboard(current => ({ ...current, goals: current.goals.map(goal => goal.id === program.goalId ? { ...goal, learningProgramId: program.programId, progress: 0 } : goal) }));
+                notify("课程已重新规划，旧版本与学习记录已保留");
+              }} />
           ) : activeTab === "记录" ? (
             <RecordsPanel dashboard={dashboard} logs={logs} onOpenQuickLog={focusQuickLog} onGenerateQuiz={(log) => generateQuiz(log.text, log.topic, log.output, log.id, true)} />
           ) : (
@@ -988,6 +1022,7 @@ export default function DashboardClient({ currentUser }: { currentUser: Dashboar
           <div className="goal-progress-dialog-heading"><span className="eyebrow">EXAMINER WORKFLOW</span><h2>考官正在评估本题</h2><p>{diagnosticProgress.message}</p></div>
           <div className="goal-creation-progress-heading"><strong>实际执行进度</strong><em>{diagnosticProgress.percent}%</em></div>
           <div className="goal-creation-progress-track" role="progressbar" aria-label="考官评分进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={diagnosticProgress.percent}><span style={{ width: `${diagnosticProgress.percent}%` }} /></div>
+          {diagnosticSourceMessage && <p role="status"><strong>课程资料来源与原因：</strong>{diagnosticSourceMessage}</p>}
           <div className="goal-creation-progress-events">{diagnosticProgressEvents.map((event, index) => <div className={index === diagnosticProgressEvents.length - 1 ? "is-current" : "is-finished"} key={`${event.stage}-${index}`}><span className="goal-creation-event-icon">{index < diagnosticProgressEvents.length - 1 ? <Check size={11} /> : <i />}</span><span>{event.message}</span><em>{event.percent}%</em></div>)}</div>
           <div className="goal-progress-dialog-footer"><span>只展示评分节点与产物，不展示模型内部推理原文。</span></div>
         </section>
@@ -1128,6 +1163,7 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
   const [isCreating, setIsCreating] = useState(false);
   const [creationProgress, setCreationProgress] = useState<GoalCreationProgress | null>(null);
   const [creationEvents, setCreationEvents] = useState<GoalCreationProgress[]>([]);
+  const [creationSourceMessage, setCreationSourceMessage] = useState("");
   const [goalToDelete, setGoalToDelete] = useState<Goal | null>(null);
   const [isDeletingGoal, setIsDeletingGoal] = useState(false);
   const completed = tasks.filter((task) => task.status === "done").length;
@@ -1153,16 +1189,19 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
   async function submitGoal() {
     if (!goalDraft.title.trim()) return;
     setIsCreating(true);
+    setCreationSourceMessage("");
     setCreationProgress(null);
     setCreationEvents([]);
     const created = await onCreateGoal(
       { ...goalDraft, title: goalDraft.title.trim(), description: goalDraft.description.trim(), background: goalDraft.background.trim() },
       (progress) => {
+        if (progress.stage === "sources") setCreationSourceMessage(progress.message);
         setCreationProgress(progress);
         setCreationEvents((current) => {
           const previous = current.at(-1);
-          if (previous?.stage === progress.stage) return [...current.slice(0, -1), progress].slice(-5);
-          return [...current, progress].slice(-5);
+          if (previous?.message === progress.message) return current;
+          if (progress.stage === 'sources') return [...current, progress].slice(-100);
+          return [...current, progress].slice(-100);
         });
       },
     );
@@ -1189,13 +1228,13 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
   }
 
   return <div className="workspace-page">
-    <div className="plan-view-toolbar"><div className="plan-view-switch"><button className={view === "week" ? "active" : ""} onClick={() => setView("week")}>本周任务</button><button className={view === "long" ? "active" : ""} onClick={() => setView("long")}>长期任务</button></div><button className="primary-button" onClick={openCreateGoal}><Plus size={15} /> 创建目标</button></div>
+    <div className="plan-view-toolbar"><div className="plan-view-switch"><button className={view === "week" ? "active" : ""} onClick={() => setView("week")}>本周任务</button><button className={view === "long" ? "active" : ""} onClick={() => setView("long")}>长期任务</button></div><div className="plan-toolbar-actions"><SourceLibrary /><button className="primary-button" onClick={openCreateGoal}><Plus size={15} /> 创建目标</button></div></div>
 
     {view === "week" ? <section className="panel plan-timeline-panel"><div className="panel-heading"><div><span className="eyebrow">WEEK TIMELINE</span><h2>本周任务时间线</h2></div><span className="count-badge">{completed}/{tasks.length} 已完成</span></div><p className="panel-desc">任务完成状态由对应课程的课后评测同步，计划页只负责看路径。</p><div className="plan-timeline">
       {tasks.map((task, index) => <article className={`plan-timeline-item ${task.status === "done" ? "is-done" : ""}`} key={task.id}><div className="plan-timeline-marker"><span>{task.status === "done" ? <Check size={13} /> : String(index + 1).padStart(2, "0")}</span></div><div className="plan-timeline-copy"><span>{task.time} · {task.duration}</span><strong>{task.title}</strong><p>{task.subtitle}</p></div><em>{task.status === "done" ? "已完成" : task.status === "current" ? "进行中" : "待开始"}</em></article>)}
       {tasks.length === 0 && <div className="records-empty"><strong>本周还没有任务</strong><p>创建长期目标后拆出下一步，或从课程中加入一节课。</p></div>}
     </div></section> : <section className="long-goals-section"><div className="goal-grid">
-      {dashboard.goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "待初始诊断" : goal.status}</span><span className="goal-horizon">{goal.horizon}</span></div><h3>{goal.title}</h3><p>{goal.description}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> 长期目标</span><div className="goal-footer-actions"><button className="goal-delete-button" aria-label={`删除长期目标 ${goal.title}`} onClick={() => setGoalToDelete(goal)}><Trash2 size={12} /> 删除</button><button className="text-button" onClick={() => onSplitGoal(goal)}>拆出下一步</button><button className="text-button" onClick={() => void onResumeGoal(goal)}>{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "开始诊断" : "继续学习"} <ChevronRight size={14} /></button></div></div></article>)}
+      {dashboard.goals.map((goal) => <article className="goal-card" key={goal.id}><div className="goal-card-top"><span className="goal-status">{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "待初始诊断" : goal.status}</span><span className="goal-horizon">{goal.horizon}</span></div><h3>{goal.title}</h3><p>{goal.description}</p><div className="goal-progress-row"><span>当前进度</span><strong>{goal.progress}%</strong></div><div className="goal-progress"><span style={{ width: `${goal.progress}%` }} /></div><div className="goal-footer"><span><Target size={13} /> 长期目标</span><div className="goal-footer-actions"><GoalSourceScopeButton goalId={goal.id} goalTitle={goal.title} /><button className="goal-delete-button" aria-label={`删除长期目标 ${goal.title}`} onClick={() => setGoalToDelete(goal)}><Trash2 size={12} /> 删除</button><button className="text-button" onClick={() => onSplitGoal(goal)}>拆出下一步</button><button className="text-button" onClick={() => void onResumeGoal(goal)}>{goal.diagnosticStatus === "pending" || goal.diagnosticStatus === "in_progress" ? "开始诊断" : "继续学习"} <ChevronRight size={14} /></button></div></div></article>)}
       {dashboard.goals.length === 0 && <button className="goal-empty-card" onClick={openCreateGoal}><Plus size={18} /><strong>创建第一个长期目标</strong><span>写清想达到的结果和大致周期。</span></button>}
     </div></section>}
 
@@ -1207,9 +1246,10 @@ function PlanPanel({ dashboard, tasks, onSplitGoal, onResumeGoal, onCreateGoal, 
           <span><Brain size={21} /></span>
         </div>
         <div className="goal-progress-dialog-heading"><span className="eyebrow">BUILDING YOUR PATH</span><h2>{visibleCreationProgress.status === "error" ? "学习路径准备失败" : "正在准备学习路径"}</h2><p>{visibleCreationProgress.message}</p></div>
-        <div className="goal-creation-progress-heading"><strong>实际执行进度</strong><em>{visibleCreationProgress.percent}%</em></div>
+        <div className="goal-creation-progress-heading"><strong>阶段进度（估计）· 知识补充最多 3 轮</strong><em>{visibleCreationProgress.percent}%</em></div>
+        {creationSourceMessage && <p role="status"><strong>课程资料来源与原因：</strong>{creationSourceMessage}</p>}
         <div className="goal-creation-progress-track" role="progressbar" aria-label="学习路径创建进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={visibleCreationProgress.percent}><span style={{ width: `${visibleCreationProgress.percent}%` }} /></div>
-        <div className="goal-creation-progress-events">
+        <div className="goal-creation-progress-events" style={{maxHeight:260,overflowY:'auto',overflowWrap:'anywhere'}}>
           {creationEvents.map((event, index) => <div className={index === creationEvents.length - 1 ? "is-current" : "is-finished"} key={`${event.stage}-${index}`}>
             <span className="goal-creation-event-icon">{event.status === "error" ? <X size={11} /> : index < creationEvents.length - 1 || event.status === "done" ? <Check size={11} /> : <i />}</span>
             <span>{event.message}</span><em>{event.percent}%</em>

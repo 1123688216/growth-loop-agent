@@ -23,6 +23,7 @@ type LearningBlockBase = {
   id: string;
   title: string;
   objectiveIds: string[];
+  sourceChunkIds?: string[];
 };
 
 export type NarrativeLearningBlock = LearningBlockBase & {
@@ -69,7 +70,24 @@ export type LessonContentOutput = {
   evidenceRequirements: EvidenceRequirement[];
   sourceStatus: SourceStatus;
   sourceRefs: string[];
+  retrievalRunId?: string;
+  sources?: LessonSource[];
   modelSummary: string;
+};
+
+export type LessonSource = {
+  chunkId: string;
+  sourceTitle: string;
+  heading: string;
+  pageStart: number | null;
+  pageEnd: number | null;
+  excerpt: string;
+  snapshotHash: string;
+};
+
+export type GroundedTutorContext = {
+  retrievalRunId: string;
+  sources: Array<LessonSource & { snapshotText: string }>;
 };
 
 export type LessonQualityIssue = {
@@ -157,9 +175,12 @@ export type CourseLesson = {
   prerequisites?: string[];
   completionEvidence?: string[];
   blocks?: LearningBlock[];
+  sources?: LessonSource[];
   contentVersionId?: string;
   sourceStatus?: SourceStatus;
   qualityStatus?: LessonQualityStatus;
+  /** Current version's user-visible findings; excludes generation metadata and answer keys. */
+  qualityReport?: Pick<LessonQualityReport, "score" | "issues" | "checkedAt" | "deterministicPassed" | "semanticPassed"> | null;
   legacyContent?: boolean;
   questions: CourseQuestion[];
 };
@@ -301,8 +322,12 @@ export type DiagnosticGrade = {
   feedback: CourseQuestionFeedback[];
 };
 
-export type GoalPreparation = {
-  nextAction: "diagnostic" | "course";
-  diagnostic?: DiagnosticAssessment;
-  program?: LearningProgram;
-};
+export type GoalPreparation =
+  | { nextAction: "diagnostic"; diagnostic: DiagnosticAssessment; program?: never; sourceWait?: never }
+  | { nextAction: "course"; program: LearningProgram; diagnostic?: never; sourceWait?: never }
+  | {
+      nextAction: "sources";
+      sourceWait: { threadId: string; retrievalRunId: string; reason: string; message: string };
+      diagnostic?: never;
+      program?: never;
+    };

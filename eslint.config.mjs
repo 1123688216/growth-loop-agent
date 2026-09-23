@@ -5,7 +5,18 @@ const eslintConfig = [
   ...nextVitals,
   ...nextTypescript,
   {
-    ignores: [".next/**", "node_modules/**", "out/**", ".android-build/**", "android/**", "artifacts/**"],
+    ignores: [
+      ".next/**",
+      "node_modules/**",
+      "out/**",
+      ".android-build/**",
+      "android/**",
+      "artifacts/**",
+      "services/**/.venv/**",
+      "services/**/.pytest_cache/**",
+      "services/**/pytest-cache-files-*/**",
+      "services/**/__pycache__/**",
+    ],
   },
 ];
 

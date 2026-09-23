@@ -1,0 +1,17 @@
+import {registerHooks} from 'node:module';
+import {existsSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {DatabaseSync} from 'node:sqlite';
+process.loadEnvFile('.env.local');
+const db=new DatabaseSync(process.argv[2],{readOnly:true});
+const row=db.prepare("SELECT input_json FROM agent_runs WHERE node_name='build_grounded_lesson_check' ORDER BY created_at DESC LIMIT 1").get();
+db.close();if(!row)throw Error('No check input');
+registerHooks({resolve(specifier,context,next){if(specifier.startsWith('@/')){const base=resolve(specifier.slice(2));for(const ext of ['.ts','.tsx','/index.ts'])if(existsSync(base+ext))return next(pathToFileURL(base+ext).href,context);}return next(specifier,context);}});
+const original=globalThis.fetch;
+globalThis.fetch=async(...args)=>{const response=await original(...args);const data=await response.clone().json();
+try{const raw=JSON.parse(data.choices[0].message.content.replace(/^```json\s*/,'').replace(/\s*```$/,''));console.log('SHAPE',JSON.stringify(raw.questions?.map(q=>({fields:Object.keys(q),prompt:typeof q.prompt,answer:typeof q.referenceAnswer,rubric:typeof q.rubric,rubricArray:Array.isArray(q.rubric),ids:q.taughtBlockIds}))));}catch{console.log('SHAPE','not parsed');}return response;};
+const {buildLessonCheck}=await import('../lib/agents/tutor.ts');
+const result=await buildLessonCheck(JSON.parse(row.input_json));
+console.log(JSON.stringify({mode:result.mode,reason:result.fallbackReason,validation:result.validationErrors,questions:result.data.length}));
+if(result.mode!=='llm')process.exitCode=1;
